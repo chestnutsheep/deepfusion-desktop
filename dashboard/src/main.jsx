@@ -238,12 +238,61 @@ function DeepFusionBrief({ reports = [], capitalFlows, derivatives = [], calenda
   </section>;
 }
 
+function dailyNewsRows(value) {
+  const lines = String(value || '').split('\\n').map((line) => line.trim()).filter(Boolean).filter((line) => line !== '[]' && line !== '—');
+  if (lines.length > 1 && /[,，]/.test(lines[0])) lines.shift();
+  return lines.slice(0, 8).map((line, index) => {
+    const fields = line.split(/[,，]/).map((part) => part.trim()).filter(Boolean);
+    const match = line.match(/^(\\d{1,2}:\\d{2}(?::\\d{2})?)\\s+(.*)$/);
+    const text = match?.[2] || fields.find((field) => !/^\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}$/.test(field) && !/^\\d{1,2}:\\d{2}/.test(field)) || line;
+    return { id: `news-${index}-${line}`, time: match?.[1] || fields.find((field) => /\\d{1,2}:\\d{2}/.test(field)) || 'LIVE', text: text.slice(0, 88) };
+  });
+}
+
+function DailyMetric({ label, value, meta, accent = 'var(--theme-accent)' }) {
+  return <div className="daily-metric"><small>{label}</small><strong style={{ color: accent }}>{value}</strong><span>{meta}</span></div>;
+}
+
+function DailyDashboard({ reports, limitUp, calendarEvents, news, loading, onOpenReport, onOpenReports }) {
+  const stocks = Array.isArray(limitUp?.stocks) ? limitUp.stocks : [];
+  const events = Array.isArray(calendarEvents) ? calendarEvents.slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))).slice(0, 6) : [];
+  const maxBoard = stocks.reduce((max, stock) => Math.max(max, Number(stock.board_height) || 0), 0);
+  const topScore = stocks.reduce((max, stock) => Math.max(max, Number(stock.score) || 0), 0);
+  const latestNews = news?.[0];
+  const sentimentColor = (value) => value === '利好' ? '#6FA088' : value === '利空' ? '#C07C7C' : 'var(--df-web-muted)';
+  return <section className="daily-dashboard enter-one">
+    <div className="daily-dashboard-head">
+      <div><p className="eyebrow">DEEPFUSION / DAILY CONTROL ROOM</p><h1>Daily <i>Signal Desk</i></h1><p>把连板、日历与 7×24 快讯压缩成可扫描的今日状态。</p></div>
+      <button className="focus-toggle" onClick={onOpenReports}>报告档案 <span>→</span></button>
+    </div>
+    <div className="daily-metrics">
+      <DailyMetric label="连板池" value={loading.limitUp ? '…' : stocks.length} meta={limitUp?.date ? `数据日 ${limitUp.date}` : '暂无收盘扫描'} />
+      <DailyMetric label="最高连板" value={maxBoard ? `${maxBoard}板` : '—'} meta={stocks.length ? `${stocks.filter((s) => Number(s.board_height) === maxBoard).length} 只同高度` : '等待数据'} accent="#C9A861" />
+      <DailyMetric label="最高评分" value={topScore ? Math.round(topScore) : '—'} meta={topScore ? '综合评分最高标的' : '等待数据'} accent="#6FA088" />
+      <DailyMetric label="未来事件" value={events.length || '—'} meta={events[0]?.date ? `最近 ${events[0].date}` : '暂无日历'} accent="#8FD6FF" />
+      <DailyMetric label="7×24 快讯" value={news?.length || '—'} meta={latestNews?.time ? `最新 ${latestNews.time}` : '暂无快讯'} accent="#D5CDB8" />
+    </div>
+    <div className="daily-grid">
+      <section className="daily-panel daily-limitup-panel"><div className="daily-panel-head"><div><small>01 / LIMIT-UP</small><h2>连板分析</h2></div><span>{stocks.length ? `${stocks.length} 个候选` : '暂无数据'}</span></div>
+        {stocks.length ? <div className="daily-board-list">{stocks.slice(0, 7).map((stock, index) => <button className="daily-board-row" key={stock.code || index} onClick={() => onOpenReport({ type: '连板分析', title: `${stock.name || '标的'} · ${stock.board_height || 0}连板`, summary: stock.rationale || stock.stage || '连板数据已入库。', date: limitUp?.date || '—', status: '实时快照', key: 'limitup', payload: stock })}><b>{String(index + 1).padStart(2, '0')}</b><strong>{stock.name || '未命名'}</strong><span>{stock.board_height || 0}板 · {stock.stage || '观察'}</span><em>{stock.score == null ? '—' : Math.round(stock.score)}</em></button>)}</div> : <div className="daily-empty">暂无可回溯的连板数据。</div>}
+      </section>
+      <section className="daily-panel daily-calendar-panel"><div className="daily-panel-head"><div><small>02 / CALENDAR</small><h2>金融日历</h2></div><span>{events.length ? `${events.length} 项近期事件` : '暂无数据'}</span></div>
+        {events.length ? <div className="daily-event-list">{events.map((event, index) => <div className="daily-event-row" key={event.id || `${event.date}-${index}`}><time>{String(event.date || '—').slice(5)}</time><div><strong>{event.name || '未命名事件'}</strong><span>{event.category || event.sector || '市场事件'}</span></div><b style={{ color: sentimentColor(event.sentiment) }}>{event.sentiment || '中性'}</b></div>)}</div> : <div className="daily-empty">未来 14 天暂无已归档事件。</div>}
+      </section>
+      <section className="daily-panel daily-news-panel"><div className="daily-panel-head"><div><small>03 / 7×24 NEWSWIRE</small><h2>财经快讯</h2></div><span>{news?.length ? `${news.length} 条最新` : '暂无数据'}</span></div>
+        {news?.length ? <div className="daily-news-list">{news.map((item) => <div className="daily-news-row" key={item.id}><time>{item.time || 'LIVE'}</time><p>{item.text}</p></div>)}</div> : <div className="daily-empty">暂无快讯，数据源恢复后自动更新。</div>}
+      </section>
+      <section className="daily-panel daily-reports-panel"><div className="daily-panel-head"><div><small>04 / REPORT STREAM</small><h2>今日判断</h2></div><button onClick={onOpenReports}>查看全部 <span>→</span></button></div><div className="daily-report-list">{reports.slice(0, 4).map((report) => <button className="daily-report-row" key={report.id} onClick={() => onOpenReport(report)}><b>{report.type}</b><span>{report.summary}</span><time>{report.date}</time></button>)}</div></section>
+    </div>
+  </section>;
+}
+
 function App() {
   const [now, setNow] = useState(new Date());
   const [active, setActive] = useState('概览');
   const [dockOpen, setDockOpen] = useState(false);
   const [focus, setFocus] = useState(false);
-  const [note, setNote] = useState(() => readLocalValue('deepfusion.desktop.note', '准备开始今天的工作。'));
+  const [note, setNote] = useState(() => readLocalValue('deepfusion.desktop.note', '请输入需要记录的事项。'));
   const [themeId, setThemeId] = useState(() => readLocalValue('deepfusion.desktop.theme', DEFAULT_THEME_ID));
   const [inboxOpen, setInboxOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -258,6 +307,9 @@ function App() {
   const [modelConfig, setModelConfig] = useState(null);
   const [butlerContext, setButlerContext] = useState([]);
   const [derivatives, setDerivatives] = useState([]);
+  const [limitUp, setLimitUp] = useState(null);
+  const [dailyNews, setDailyNews] = useState([]);
+  const [dailyLoading, setDailyLoading] = useState({ limitUp: true, news: true });
   const theme = getTheme(themeId);
   const reportRows = liveReports;
   const unreadCount = reportRows.filter((report) => report.unread).length;
@@ -279,6 +331,8 @@ function App() {
       setReportsLoading(false);
     });
     mcp.call('calendar_upcoming', { days: 14 }).then((data) => { if (alive) setCalendarEvents(parseJson(data, {}).events || []); }).catch(() => {});
+    mcp.call('limit_up_latest', {}).then((data) => { if (alive) setLimitUp(parseJson(data, null)); }).catch(() => {}).finally(() => alive && setDailyLoading((state) => ({ ...state, limitUp: false })));
+    mcp.call('stock_news_global', {}).then((data) => { if (alive) setDailyNews(dailyNewsRows(data)); }).catch(() => {}).finally(() => alive && setDailyLoading((state) => ({ ...state, news: false })));
     mcp.call('capital_flows_snapshot', { force: false }).then((data) => { if (alive) setCapitalFlows(parseJson(data, null)); }).catch(() => {});
     Promise.all([
       mcp.call('option_ivix', { limit: 1 }).then((data) => ({ name: '50ETF QVIX', meta: '最新 ' + String(data).split('\\n').filter(Boolean).slice(-1)[0]?.slice(0, 80) })).catch(() => null),
@@ -356,18 +410,18 @@ function App() {
         <div className="rail-foot"><button className="nav" onClick={() => setActive('工作台')}><span>⚙</span><em>设置</em></button></div>
       </aside>
       <div className="workspace">
-        {showWorkbench ? <ButlerWorkspace config={modelConfig} context={butlerContext} reports={reportRows} onRefresh={() => { window.location.reload(); }} onOpenReports={openReportCenter} /> : showReportCenter ? <section className="report-center enter-one">
+        {showWorkbench ? <ButlerWorkspace config={modelConfig} context={butlerContext} reports={reportRows} onRefresh={() => { window.location.reload(); }} onOpenReports={openReportCenter} /> : showReportCenter ? <>{<DailyDashboard reports={reportRows} limitUp={limitUp} calendarEvents={calendarEvents} news={dailyNews} loading={dailyLoading} onOpenReport={openReport} onOpenReports={() => setReportFilter('全部')} />}<section className="report-center daily-archive enter-one">
           <div className="report-center-hero"><div><p className="eyebrow">DEEPFUSION / REPORT ARCHIVE · SQL LIVE</p><h1>日报档案。<br /><span>把每一次判断留在时间里。</span></h1><p>四类日报直接读取 `reports.db`，按报告业务日与实际入库时间排序；不同报告采用对应的阅读结构。</p></div><button className="focus-toggle" onClick={() => setActive('概览')}>返回主屏 <span>←</span></button></div>
           <div className="archive-toolbar"><div className="archive-tabs">{REPORT_TYPES.map((filter) => <button key={filter} className={reportFilter === filter ? 'selected' : ''} onClick={() => setReportFilter(filter)}>{filter}</button>)}</div><span>{reportsLoading ? '正在读取 SQL…' : reportsError ? '当前无日报入库' : `共 ${visibleReports.length} 份档案`}</span></div>
           <div className="archive-list">{reportsLoading ? <div className="report-empty-state">正在从 `reports.db` 读取日报…</div> : visibleReports.length ? visibleReports.map((report) => <article key={report.id} className="archive-item"><ReportRow report={report} onOpen={openReport} /><div className="report-meta"><span>{report.status}</span><span>报告日 {report.date}</span><span>实际入库 {report.createdAt}</span></div></article>) : <div className="report-empty-state">暂无符合条件的真实日报，定时任务写入后会自动出现在这里。</div>}</div>
-        </section> : <>
+        </section></> : <>
           {active === '任务' && <CapabilityPanel title="未来 14 天金融事件" eyebrow="DEEPFUSION / EVENT CALENDAR" items={taskItems} empty="事件日历暂无待办，点击下方刷新后端采集。" />}
           {active === '市场' && <CapabilityPanel title="资金面动向" eyebrow="DEEPFUSION / CAPITAL FLOWS" items={capitalItems} empty="资金快照暂未落盘。" />}
           {active === '文件' && <CapabilityPanel title="政策文件索引" eyebrow="DEEPFUSION / POLICY LIBRARY" items={policyResults} empty="政策库暂无结果；本机文件浏览能力尚未接入。" />}
-          <section className="hero enter-one"><div><p className="eyebrow">TODAY / {now.toISOString().slice(0, 10)} <span className="theme-caption">· {theme.name} / {theme.tone}</span></p><h1>早上好。<br /><span>让节奏由你掌控。</span></h1><p className="hero-copy">本机主屏正在守候。所有计划、数据与提醒都在你的电脑上按时运行。</p></div><button className="focus-toggle" onClick={() => setFocus(!focus)}>{focus ? '退出专注' : '进入专注'} <span>↗</span></button></section>
+          <section className="hero enter-one"><div><p className="eyebrow">TODAY / {now.toISOString().slice(0, 10)} <span className="theme-caption">· {theme.name} / {theme.tone}</span></p><h1 className="hero-motto"><span>Move with intention.</span><br /><i>Let the day unfold.</i></h1></div><button className="focus-toggle" onClick={() => setFocus(!focus)}>{focus ? '退出专注' : '进入专注'} <span>↗</span></button></section>
           {!focus && <div className="dashboard-grid">
-            <section className="panel agenda enter-two"><div className="panel-head"><div><p className="eyebrow">LOCAL AUTOMATION / LIVE CLOCK</p><h2>今天的节拍</h2></div><button onClick={() => setActive('任务')}>任务专区 <span>→</span></button></div><ScheduleTimeline now={now} onNavigate={navigateFromSchedule} /></section>
-            <section className="panel command enter-three"><p className="eyebrow">DESK NOTE</p><h2>此刻重要的事</h2><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="桌面便签" /><div className="note-footer"><span><i className="tiny-dot" /> 自动保存到本机</span><button onClick={() => setNote('已清空。')}>清空</button></div></section>
+            <section className="panel agenda enter-two"><div className="panel-head"><div><p className="eyebrow">LOCAL AUTOMATION / LIVE CLOCK</p><h2>今日任务安排</h2></div><button onClick={() => setActive('任务')}>任务专区 <span>→</span></button></div><ScheduleTimeline now={now} onNavigate={navigateFromSchedule} /></section>
+            <section className="panel command enter-three"><p className="eyebrow">DESK NOTE</p><h2>工作备注</h2><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="桌面便签" /><div className="note-footer"><span><i className="tiny-dot" /> 已自动保存</span><button onClick={() => setNote('已清空。')}>清空</button></div></section>
             <div id="market-pulse"><MarketPulse now={now} onNote={setNote} /></div>
             <DeepFusionBrief reports={reportRows} capitalFlows={capitalFlows} derivatives={derivatives} calendarEvents={calendarEvents} onOpenReports={(report) => report ? openReport(report) : openReportCenter()} />
             <section className="panel storage enter-five"><div className="storage-top"><div><p className="eyebrow">LOCAL SYSTEM</p><h2>空间与状态</h2></div><span className="health">● 正常</span></div><div className="storage-content"><div className="ring"><span>64<small>%</small></span></div><div><strong>512 GB <small>/ 800 GB</small></strong><p>本地工作空间</p><div className="capacity"><i /></div></div></div><div className="storage-tags"><span>Documents <b>148 GB</b></span><span>Projects <b>192 GB</b></span></div></section>
