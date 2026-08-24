@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Vite build output
+dist/
+dist-ssr/
+*.local
+
+# Tauri / Rust build output
+src-tauri/target/
+
+# Generated installers and bundles
+*.AppImage
+*.deb
+*.rpm
+*.dmg
+*.msi
+*.exe
+
+# Local logs and environment files
+logs/
+*.log
+.env
+.env.*
+!.env.example
+
+# IDE and OS files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+*.swp
