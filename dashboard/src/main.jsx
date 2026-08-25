@@ -5,16 +5,14 @@ import { getNextThemeId, getTheme, DEFAULT_THEME_ID } from './design/themes';
 import { REPORT_TYPES } from './data/reportFixtures';
 import { readLocalValue, writeLocalValue } from './shared/storage';
 import { mcp } from './services/mcp';
+
+const apiBaseUrl = mcp.apiBaseUrl;
+import { fetchLatestReports } from './services/reports';
+import ReportDataStatus from './components/ReportDataStatus';
+import WatchlistPanel from './components/WatchlistPanel';
 import './styles.css';
 
 const navItems = [['概览', '⌂'], ['日报', '✉'], ['任务', '◫'], ['市场', '⌁'], ['文件', '⌑'], ['工作台', '▦'], ['专注', '◌']];
-const reportKinds = [
-  ['premarket', '盘前简报'],
-  ['noonnews', '午间新闻驱动'],
-  ['qualitystock', '优质股推送'],
-  ['dailyreview', '每日复盘'],
-];
-
 const schedule = [
   { time: '09:00', title: '盘前信息简报', meta: '本地任务 · 预计 2 分钟', state: '就绪', target: '日报' },
   { time: '12:50', title: '午间新闻驱动扫描', meta: '采集 · 分析 · 推送候选项', state: '待运行', target: '市场' },
@@ -146,42 +144,6 @@ function textValue(value, fallback = '') {
   return fallback;
 }
 
-function reportLabel(type) {
-  return reportKinds.find(([key]) => key === type)?.[1] || type;
-}
-
-function reportToRow(item, type) {
-  const payload = parseJson(item.payload, {});
-  const stocks = Array.isArray(payload.stocks) ? payload.stocks : [];
-  const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
-  const items = Array.isArray(payload.items) ? payload.items : [];
-  const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
-  const title = type === 'premarket'
-    ? textValue(payload.mainline_view?.title || payload.market_sentiment, `${reportLabel(type)} · ${payload.trade_date || payload.date || item.date}`)
-    : type === 'noonnews'
-      ? textValue(payload.headline, `${reportLabel(type)} · ${payload.date || item.date}`)
-      : type === 'qualitystock'
-        ? `${reportLabel(type)} · ${stocks.length} 只候选`
-        : type === 'dailyreview'
-          ? `${reportLabel(type)} · ${symbols.length || '市场'} 项观察`
-          : `${reportLabel(type)}报告`;
-  const summary = type === 'premarket'
-    ? textValue(payload.overview?.sentiment || payload.overview?.overseas_summary || payload.mainline_view?.summary || payload.risk_hint || payload.data_caveat, '海外、政策、行业与公告催化已归档。')
-    : type === 'noonnews'
-      ? textValue(payload.summary || items[0]?.summary || candidates[0]?.reason, `${items.length || candidates.length} 条午间催化已归档。`)
-      : type === 'qualitystock'
-        ? textValue(payload.summary, `${stocks.filter((stock) => stock.selected !== false).length} 只标的通过多维筛选。`)
-        : type === 'dailyreview'
-          ? textValue(payload.overview || payload['今日复盘结论'] || payload['📌 今日复盘结论'], `${symbols.length} 项标的与市场信号已完成复盘。`)
-          : '报告已入库。';
-  return {
-    id: `${type}:${item.date || item.created_at}`,
-    type: reportLabel(type), key: type,
-    date: item.date || '—', createdAt: item.created_at || '—', unread: false,
-    status: item.payload ? '已入库' : '暂无数据', title, summary,
-    payload,
-  };
-}
 
 function ReportSection({ title, value }) {
   if (value == null || value === '') return null;
@@ -295,6 +257,8 @@ function App() {
   const [note, setNote] = useState(() => readLocalValue('deepfusion.desktop.note', '请输入需要记录的事项。'));
   const [themeId, setThemeId] = useState(() => readLocalValue('deepfusion.desktop.theme', DEFAULT_THEME_ID));
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [dataStatusOpen, setDataStatusOpen] = useState(false);
+  const [dataStatusRefresh, setDataStatusRefresh] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
   const [reportFilter, setReportFilter] = useState('全部');
@@ -318,14 +282,8 @@ function App() {
   useEffect(() => {
     let alive = true;
     setReportsLoading(true);
-    Promise.all(reportKinds.map(async ([type]) => {
-      try {
-        const data = parseJson(await mcp.call('report_history', { rtype: type, limit: 8 }), {});
-        return (data.history || []).map((item) => reportToRow(item, type));
-      } catch { return []; }
-    })).then((groups) => {
+    fetchLatestReports(8).then((rows) => {
       if (!alive) return;
-      const rows = groups.flat().sort((a, b) => `${b.date} ${b.createdAt}`.localeCompare(`${a.date} ${a.createdAt}`));
       setLiveReports(rows);
       setReportsError(!rows.length);
       setReportsLoading(false);
@@ -339,8 +297,8 @@ function App() {
       mcp.call('futures_prices', { symbol: '原油', limit: 1 }).then((data) => ({ name: '原油主力', meta: '最新主力行情已接入' })).catch(() => null),
     ]).then((rows) => { if (alive) setDerivatives(rows.filter(Boolean)); });
     mcp.call('policy_search', { keyword: '', limit: 6 }).then((data) => { if (alive) setPolicyResults(parsePolicyText(data).slice(0, 6)); }).catch(() => {});
-    fetch('http://127.0.0.1:5173/api/model-config').then((response) => response.json()).then((data) => { if (alive && data.ok) setModelConfig(data.config); }).catch(() => {});
-    fetch('http://127.0.0.1:5173/api/butler/context?scope=desktop&limit=5').then((response) => response.json()).then((data) => { if (alive && data.ok) setButlerContext(data.context || []); }).catch(() => {});
+    fetch(`${apiBaseUrl}/api/model-config`).then((response) => response.json()).then((data) => { if (alive && data.ok) setModelConfig(data.config); }).catch(() => {});
+    fetch(`${apiBaseUrl}/api/butler/context?scope=desktop&limit=5`).then((response) => response.json()).then((data) => { if (alive && data.ok) setButlerContext(data.context || []); }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
@@ -386,7 +344,10 @@ function App() {
       <div className="time"><strong>{timeLabel}</strong><span>{dateLabel}</span></div>
       <div className="system-status" aria-label="系统状态">
         <span className="theme-label"><span className="online-dot" /> {theme.name}主题</span>
-        <button className="icon-button inbox-trigger" onClick={() => setInboxOpen(!inboxOpen)} aria-label="打开日报收件箱">✉{unreadCount > 0 && <b>{unreadCount}</b>}</button>
+        <button className="icon-button inbox-trigger" onClick={() => { setInboxOpen(!inboxOpen); setDataStatusOpen(false); }} aria-label="打开日报收件箱">✉{unreadCount > 0 && <b>{unreadCount}</b>}</button>
+        <button className="data-link-trigger" onClick={() => { setDataStatusOpen(!dataStatusOpen); setDataStatusRefresh((value) => value + 1); setInboxOpen(false); }} aria-expanded={dataStatusOpen} aria-controls="report-data-popover">
+          <span className="data-link-dot" /> 数据
+        </button>
         <button className="icon-button" onClick={() => setThemeId(getNextThemeId(themeId))} aria-label="切换睡莲主题">◌</button>
         <button className="icon-button desktop-trigger" onClick={showDesktop} aria-label="显示真实桌面" title="显示真实桌面">▣</button>
         <div className="settings-wrap">
@@ -402,6 +363,11 @@ function App() {
         <div className="inbox-list">{reportRows.slice(0, 4).map((report) => <ReportRow key={report.id} report={report} onOpen={openReport} compact />)}</div>
         <div className="inbox-foot"><span>按实际生成时间排序</span><button onClick={openReportCenter}>进入报告中心 <i>→</i></button></div>
       </aside>}
+      {dataStatusOpen && <aside id="report-data-popover" className="report-data-popover" aria-label="报告数据接入状态">
+        <div className="report-data-popover-head"><div><p className="eyebrow">REPORT DATA LINK</p><h2>数据接入</h2></div><button onClick={() => setDataStatusOpen(false)} aria-label="关闭数据接入面板">×</button></div>
+        <ReportDataStatus refreshKey={dataStatusRefresh} />
+        <div className="report-data-popover-foot"><span>检测 MCP → reports.db 实时链路</span><button onClick={() => setDataStatusRefresh((value) => value + 1)}>重新检测 ↻</button></div>
+      </aside>}
     </header>
 
     <section className="content-shell">
@@ -412,6 +378,7 @@ function App() {
       <div className="workspace">
         {showWorkbench ? <ButlerWorkspace config={modelConfig} context={butlerContext} reports={reportRows} onRefresh={() => { window.location.reload(); }} onOpenReports={openReportCenter} /> : showReportCenter ? <>{<DailyDashboard reports={reportRows} limitUp={limitUp} calendarEvents={calendarEvents} news={dailyNews} loading={dailyLoading} onOpenReport={openReport} onOpenReports={() => setReportFilter('全部')} />}<section className="report-center daily-archive enter-one">
           <div className="report-center-hero"><div><p className="eyebrow">DEEPFUSION / REPORT ARCHIVE · SQL LIVE</p><h1>日报档案。<br /><span>把每一次判断留在时间里。</span></h1><p>四类日报直接读取 `reports.db`，按报告业务日与实际入库时间排序；不同报告采用对应的阅读结构。</p></div><button className="focus-toggle" onClick={() => setActive('概览')}>返回主屏 <span>←</span></button></div>
+          <ReportDataStatus refreshKey={reportsLoading ? 0 : 1} />
           <div className="archive-toolbar"><div className="archive-tabs">{REPORT_TYPES.map((filter) => <button key={filter} className={reportFilter === filter ? 'selected' : ''} onClick={() => setReportFilter(filter)}>{filter}</button>)}</div><span>{reportsLoading ? '正在读取 SQL…' : reportsError ? '当前无日报入库' : `共 ${visibleReports.length} 份档案`}</span></div>
           <div className="archive-list">{reportsLoading ? <div className="report-empty-state">正在从 `reports.db` 读取日报…</div> : visibleReports.length ? visibleReports.map((report) => <article key={report.id} className="archive-item"><ReportRow report={report} onOpen={openReport} /><div className="report-meta"><span>{report.status}</span><span>报告日 {report.date}</span><span>实际入库 {report.createdAt}</span></div></article>) : <div className="report-empty-state">暂无符合条件的真实日报，定时任务写入后会自动出现在这里。</div>}</div>
         </section></> : <>
@@ -422,6 +389,7 @@ function App() {
           {!focus && <div className="dashboard-grid">
             <section className="panel agenda enter-two"><div className="panel-head"><div><p className="eyebrow">LOCAL AUTOMATION / LIVE CLOCK</p><h2>今日任务安排</h2></div><button onClick={() => setActive('任务')}>任务专区 <span>→</span></button></div><ScheduleTimeline now={now} onNavigate={navigateFromSchedule} /></section>
             <section className="panel command enter-three"><p className="eyebrow">DESK NOTE</p><h2>工作备注</h2><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="桌面便签" /><div className="note-footer"><span><i className="tiny-dot" /> 已自动保存</span><button onClick={() => setNote('已清空。')}>清空</button></div></section>
+            <WatchlistPanel />
             <div id="market-pulse"><MarketPulse now={now} onNote={setNote} /></div>
             <DeepFusionBrief reports={reportRows} capitalFlows={capitalFlows} derivatives={derivatives} calendarEvents={calendarEvents} onOpenReports={(report) => report ? openReport(report) : openReportCenter()} />
             <section className="panel storage enter-five"><div className="storage-top"><div><p className="eyebrow">LOCAL SYSTEM</p><h2>空间与状态</h2></div><span className="health">● 正常</span></div><div className="storage-content"><div className="ring"><span>64<small>%</small></span></div><div><strong>512 GB <small>/ 800 GB</small></strong><p>本地工作空间</p><div className="capacity"><i /></div></div></div><div className="storage-tags"><span>Documents <b>148 GB</b></span><span>Projects <b>192 GB</b></span></div></section>
