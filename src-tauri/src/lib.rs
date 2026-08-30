@@ -63,12 +63,12 @@ pub fn run() {
 
             eprintln!("window after fullscreen outer={:?} inner={:?} fullscreen={:?} scale={:?}", window.outer_size(), window.inner_size(), window.is_fullscreen(), window.scale_factor());
 
-            // 窗口创建即自动拉起后端服务（5173），保持活性直到用户点击关闭主屏。
+            // 后端生命周期已解耦：面板不再 spawn 后端，仅探测是否在线。
+            // 真正拉起请用独立 DF Server 脚本/桌面按钮。
             let backend_state = app.state::<BackendState>();
-            match spawn_backend(&backend_state) {
-                Ok(_) => eprintln!("[backend] auto-started on launch"),
-                Err(e) => eprintln!("[backend] auto-start skipped: {e}"),
-            }
+            let running = is_backend_running();
+            *backend_state.0.lock().unwrap() = Some(running);
+            eprintln!("[backend] detected at launch: {}", if running { "running" } else { "not running (use DF Server to start)" });
 
             Ok(())
         })
@@ -76,81 +76,51 @@ pub fn run() {
         .expect("error while running DeepFusion Desktop");
 }
 
-/// 实际拉起后端进程：spawn 一个独立进程组的 bash 运行 serve.py。
-/// 成功返回进程组 ID（== 子进程 pid），供 stop_backend 用 killpg 整组清除。
-fn spawn_backend(state: &tauri::State<BackendState>) -> Result<u32, String> {
-    {
-        let guard = state.0.lock().map_err(|e| e.to_string())?;
-        if guard.is_some() {
-            return Err("already_running".to_string());
-        }
+/// 探测后端服务（5173）是否在线。仅做 TCP 连接探测，不拉起、不管理后端生命周期。
+/// 后端完全由独立 DF Server 脚本/按钮管控，面板与 Web 看板都只连、不管。
+fn is_backend_running() -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    match TcpStream::connect_timeout(
+        &"127.0.0.1:5173".parse().unwrap(),
+        Duration::from_millis(400),
+    ) {
+        Ok(_) => true,
+        Err(_) => false,
     }
-
-    // 后端服务目录通过环境变量 DEEP_FUSION_HOME 指定（缺省回落原路径）。
-    // 解耦 desktop panel 与后端仓库的物理位置，便于后端独立为 deepfusion-server 模块。
-    let deepfusion_dir = std::env::var("DEEP_FUSION_HOME")
-        .unwrap_or_else(|_| "/home/AI/workspace/Mcp Server/deepfusion-server".to_string());
-    // 直接 spawn bash，并用 process_group(0) 使其成为新进程组组长，
-    // 这样 child.id() == pgid，stop_backend 用 killpg(pgid) 即可整组清除后端。
-    let child = Command::new("bash")
-        .arg("-c")
-        .arg(format!(
-            "cd \"{dir}\" && exec uv run serve.py >>/tmp/webui-5173.log 2>&1",
-            dir = deepfusion_dir
-        ))
-        .process_group(0)
-        .spawn();
-
-    let child = match child {
-        Ok(c) => c,
-        Err(e) => return Err(format!("启动后端失败: {e}")),
-    };
-
-    let pgid = child.id();
-    eprintln!("[backend] started serve.py pgid={pgid}");
-
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    *guard = Some(BackendHandle { pgid });
-    Ok(pgid)
 }
 
-/// 启动后端服务（DeepFusion serve.py）。供前端“启动应用”按钮调用。
+/// 启动后端服务（DeepFusion serve.py）。
+/// 注意：面板不再负责 spawn 后端。此命令改为“探测是否在线”——已在线返回 running，
+/// 否则返回 backend_not_running（提示用户用 DF Server 按钮启动），避免与 Web 看板争抢生命周期。
 #[tauri::command]
 fn start_backend(state: tauri::State<BackendState>) -> Result<String, String> {
-    match spawn_backend(&state) {
-        Ok(_) => Ok("started".to_string()),
-        Err(e) if e == "already_running" => Ok("running".to_string()),
-        Err(e) => Err(e),
+    let running = is_backend_running();
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    *guard = Some(running);
+    if running {
+        Ok("running".to_string())
+    } else {
+        Err("backend_not_running".to_string())
     }
 }
 
-/// 停止后端服务：向整个进程组发送 SIGKILL，并清空状态。
+/// 停止后端服务：面板不再拥有后端生命周期，此命令改为 no-op。
+/// 真正停止后端请用 DF Server 脚本或 pkill serve.py。
 #[tauri::command]
 fn stop_backend(state: tauri::State<BackendState>) -> Result<String, String> {
-    let handle = {
-        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-        guard.take()
-    };
-    match handle {
-        Some(h) => {
-            let pgid = h.pgid as i32;
-            eprintln!("[backend] stopping serve.py pgid={pgid}");
-            // 杀掉整个进程组（后端可能 fork 出子进程）。
-            unsafe {
-                libc::killpg(pgid, libc::SIGKILL);
-            }
-            // 进程组已被 SIGKILL，子进程句柄无需 wait，直接丢弃。
-            Ok("stopped".to_string())
-        }
-        None => Ok("not_running".to_string()),
-    }
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    *guard = Some(false);
+    Ok("ignored_by_panel".to_string())
 }
 
-/// 返回后端当前是否在运行。
+/// 返回后端当前是否在运行（基于 5173 端口探测）。
 #[tauri::command]
 fn backend_status(state: tauri::State<BackendState>) -> Result<bool, String> {
-    let guard = state.0.lock().map_err(|e| e.to_string())?;
-    Ok(guard.is_some())
+    let running = is_backend_running();
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    *guard = Some(running);
+    Ok(running)
 }
 
 /// 持仓磁盘备份：写入 ~/.config/deepfusion/watchlist.json（独立于 WebView 缓存）

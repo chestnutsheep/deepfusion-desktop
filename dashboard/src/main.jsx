@@ -274,6 +274,7 @@ function App() {
   // 后端服务是否处于运行态：决定面板是“已启动”还是“已关闭（需点击启动应用）”
   const [running, setRunning] = useState(true);
   const [backendBusy, setBackendBusy] = useState(false);
+  const [backendError, setBackendError] = useState(''); // 后端未启动等提示，面板内可见
   const theme = getTheme(themeId);
   const reportRows = liveReports;
   const unreadCount = reportRows.filter((report) => report.unread).length;
@@ -315,15 +316,21 @@ function App() {
     writeLocalValue('deepfusion.desktop.theme', themeId);
   }, [themeId]);
 
-  // 应用首次加载时自动拉起后端并保持活性（仅一次）。
+  // 应用首次加载时探测后端是否在线（面板不再负责拉起后端，改由独立 DF Server 按钮管控）。
+  // 后端未启动时提示用户，而不是自行 spawn，避免与 Web 看板争抢后端生命周期。
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        await invoke('start_backend');
+        await invoke('start_backend'); // 已在线 -> running；未在线 -> 抛 backend_not_running
         if (!cancelled) setRunning(true);
       } catch (e) {
-        console.error('[desktop] init backend failed', e);
+        // 后端未启动：提示用户使用桌面“DF Server”按钮，面板进入“未连接”态。
+        console.warn('[desktop] backend not running, please click DF Server to start:', e);
+        if (!cancelled) {
+          setRunning(false);
+          setBackendError('后端未启动：请先点击桌面「DF Server」按钮。');
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -361,28 +368,30 @@ function App() {
   };
   const closePanel = async () => {
     try {
-      // 先结束后端服务（整个进程组），再隐藏面板。进程保留以便下次点击启动应用。
-      setBackendBusy(true);
-      try { await invoke('stop_backend'); } catch (e) { console.error('[desktop] stop backend failed', e); }
+      // 面板不再管理后端生命周期：关闭主屏仅隐藏面板，后端由独立 DF Server 管控，保持运行。
       const window = getCurrentWindow();
       await window.setFullscreen(false);
       await window.hide();
       setRunning(false);
     } catch (error) {
       console.error('[desktop] close panel failed', error);
-    } finally {
-      setBackendBusy(false);
     }
   };
   const startPanel = async () => {
     try {
       setBackendBusy(true);
-      await invoke('start_backend');
-      const window = getCurrentWindow();
-      if (await window.isMinimized()) await window.unminimize();
-      await window.show();
-      await window.setFocus();
-      setRunning(true);
+      try {
+        await invoke('start_backend'); // 已在线 -> running；未在线 -> 抛 backend_not_running
+        const window = getCurrentWindow();
+        if (await window.isMinimized()) await window.unminimize();
+        await window.show();
+        await window.setFocus();
+        setRunning(true);
+      } catch (e) {
+        // 后端未启动：提示用户用 DF Server 按钮，不自行拉起。
+        console.warn('[desktop] backend not running', e);
+        setBackendError('后端未启动：请先点击桌面「DF Server」按钮。');
+      }
     } catch (error) {
       console.error('[desktop] start panel failed', error);
     } finally {
@@ -496,10 +505,11 @@ function App() {
       <div className="app-launcher" role="dialog" aria-label="应用已关闭">
         <div className="app-launcher-card">
           <span className="brand-mark">D</span>
-          <h1>DeepFusion 已停止</h1>
-          <p>前后端服务均已结束。点击下方按钮拉起后端并保持活性，直到再次关闭主屏。</p>
+          <h1>DeepFusion 面板已收起</h1>
+          <p>面板已隐藏，后端服务（如已通过「DF Server」启动）仍在运行。点击下方按钮重新打开面板；若提示后端未启动，请先点击桌面「DF Server」。</p>
+          {backendError && <p className="launch-error">{backendError}</p>}
           <button className="launch-button" onClick={startPanel} disabled={backendBusy}>
-            {backendBusy ? '正在拉起服务…' : '启动应用 ▶'}
+            {backendBusy ? '正在打开…' : '启动应用 ▶'}
           </button>
         </div>
       </div>
