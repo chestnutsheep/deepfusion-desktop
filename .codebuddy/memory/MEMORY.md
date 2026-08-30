@@ -59,6 +59,17 @@
 - **面板接 DeepFusion 数据方式**：HTTP 直连 `127.0.0.1:5173/api/tools/call`（非 Tauri mcp 插件）。
 - **名称/行业/概念来源**：`stock_quote` 不含 name；名称靠 `search`、概念靠 `stock_concepts(symbol, market)`（须带 market）。`watchlist.js` 的 `fetchMeta` 已回填，后端没起时降级手填。
 
+## ⚠️ 面板卡死根因 & 前端熔断（2026-08-30 深夜，重要经验）
+- **现象**：解除 noticer 限制 + 改过 Panel 部分后，面板一启动就**卡成 PPT**（CPU 100%、进程暴涨、被自动登出）。
+- **真根因（非监听数累积）**：后端 `serve.py`(5173) 因 `ak_cache failed ProxyError` 预热偶发起不来时，前端 `mcpTool`/`fetchQuote` **无退避/熔断**，每次 effect 触发（noticer 事件变多）就狂发 `/api/tools/call`，全部瞬间 `ECONNREFUSED`，每次仍走完整 fetch+JSON+logEvent → 主线程打满 → PPT。日志里一次喷十几条 `[vite] http proxy error /api/tools/call ECONNREFUSED`。
+- **修复（已在 dashboard 落地）**：
+  1. `services/watchlist.js` 新增 `BACKEND_OK` 熔断状态机：`FAIL_THRESHOLD=3` 连续失败进熔断，`COOLDOWN_MS=15000` 内所有 `mcpTool`/`fetchQuote` **直接短路**（返回 null/缓存，不发请求）；冷却结束用一次 `search` 探活恢复。`recordBackendResult()` 上报成败。
+  2. `components/WatchlistPanel.jsx` 的 `refresh()` 加 `refreshingRef` 并发锁（上一轮未完成则跳过），防 noticer 高频触发重叠 `Promise.all`；`useRef` 已导入。
+  3. `portfolioStore.js` 保留 `MAX_LISTENERS=64` 硬性上限作护栏（防 listener 累积）。
+- **验证**：重启后进程数稳 429 不涨、deepfusion 仅 3 进程、CPU 最高 WebKit 13.6%（正常）、5188+5173 均 LISTEN、窗口正常弹出。**后端独立 `uv run serve.py` 能正常起 5173**。
+- **经验**：Tauri/前端项目里，**任何对本地后端/API 的调用都必须加熔断+退避+并发锁**，否则后端偶发不可达时会自杀式重试打满 WebView 主线程。不能只靠"监听上限"兜底。
+- **启动脚本硬性清理**：`~/.local/bin/launch-deepfusion-app.sh` 已改为「循环 SIGTERM→SIGKILL 杀旧 tauri/cargo 进程 → pgrep 校验零残留 + 5188 端口释放 → 再 `setsid npm run tauri dev`」。另存 `clean-deepfusion-panel.sh` 仅清理不启动。运行日志在 `/tmp/deepfusion-launch.log`（保留，脚本会写）。
+
 ## DeepFusion 项目内 MCP
 - `DeepFusion/server.json` 的 mcp 配置是给 Claude Desktop 用的（Windows 路径 `G:\PycharmProjects\DeepFusion` + 7897 代理，本机不可用）。真实 stdio 入口：`uv run deep-fusion`（`pyproject.toml` 的 `[project.scripts] deep-fusion = "deep_fusion:main"`），本机 uv 可用。但面板未采用此方式。
 - DeepFusion 后端启动：`cd DeepFusion && uv run serve.py`（uvicorn, 端口 5173）。WebUI 前端：`cd DeepFusion/dashboard && npm run dev`（vite, 端口 8080）。
