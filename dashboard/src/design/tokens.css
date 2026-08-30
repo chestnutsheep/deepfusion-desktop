@@ -1,0 +1,111 @@
+/* ============================================================
+ * Design Tokens — 全局设计令牌（唯一调控入口）
+ * 字号 / 间距 / 圆角 / 边框 / 阴影 / 玻璃 / 重影 / 语义色
+ * 所有模块引用这些变量，禁止在组件里硬编码样式数值。
+ * ============================================================ */
+
+:root {
+  /* ---- 字体族 ---- */
+  --df-font-serif: 'Times New Roman', Times, 'Noto Serif SC', serif;
+  --df-font-sans: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+
+  /* ---- 字号阶梯（统一，不再各处写 px） ---- */
+  --df-fs-display: clamp(42px, 5.1vw, 72px); /* 主标题 */
+  --df-fs-h1: 24px;                         /* 面板标题 */
+  --df-fs-h2: 18px;                         /* 区块标题 */
+  --df-fs-sub: 16px;                        /* 小标题/强调 */
+  --df-fs-body: 14px;                       /* 正文 */
+  --df-fs-sm: 13px;                         /* 次要文字 */
+  --df-fs-xs: 11px;                         /* 标签/脚注 */
+
+  /* ---- 间距尺度（统一，替代散落的 6/10/14/18/24/32） ---- */
+  --df-space-xs: 6px;
+  --df-space-sm: 10px;
+  --df-space-md: 14px;
+  --df-space-lg: 18px;
+  --df-space-xl: 24px;
+  --df-space-2xl: 32px;
+
+  /* ---- 圆角 ---- */
+  --df-radius-xs: 2px;
+  --df-radius-sm: 4px;
+  --df-radius-md: 8px;
+  --df-radius-lg: 12px;
+  --df-radius-pill: 999px;
+
+  /* ---- 边框粗细 ---- */
+  --df-border-w-thin: 1px;
+  --df-border-w-med: 1.5px;
+  --df-border-w-thick: 2px;
+
+  /* ---- 阴影（统一层级） ---- */
+  --df-shadow-sm: 0 2px 8px rgba(0, 0, 0, .22);
+  --df-shadow-md: 0 12px 30px rgba(0, 0, 0, .30);
+  --df-shadow-lg: 0 22px 55px rgba(0, 0, 0, .42);
+  --df-shadow-inset: inset 0 1px 0 color-mix(in srgb, var(--theme-accent, #d8c978) 16%, transparent);
+
+  /* ---- 玻璃（下沉/半透明镜面层） ---- */
+  --df-glass-bg: rgba(13, 21, 18, .42);          /* 更深、更透的玻璃底 */
+  --df-glass-bg-strong: rgba(8, 13, 11, .62);
+  --df-glass-blur: 22px;                          /* 毛玻璃强度 */
+  --df-glass-saturate: 1.15;
+  --df-glass-border: 1px solid rgba(225, 232, 209, .14);
+
+  /* ---- 重影（恍惚微重影，字体像沉在镜面之下） ---- */
+  --df-ghost-shadow:
+    0 1px 0 rgba(255, 255, 255, .045),
+    0 2px 10px rgba(0, 0, 0, .38);
+  --df-ghost-shadow-soft:
+    0 1px 0 rgba(255, 255, 255, .03),
+    0 1px 6px rgba(0, 0, 0, .30);
+
+  /* ---- 主题强调色（与既有 --theme-accent 对齐） ---- */
+  --df-accent: var(--theme-accent, #d8c978);
+  --df-glow: var(--theme-glow, #c9a853);
+
+  /* ---- 文本层级 ---- */
+  --df-ink-strong: var(--ink-strong, #f0f1e7);
+  --df-ink: var(--ink, #d8ddd1);
+  --df-ink-muted: var(--ink-muted, #aeb8aa);
+  --df-ink-faint: var(--ink-faint, #7f8c82);
+
+  /* ---- 分隔线 ---- */
+  --df-line: rgba(225, 232, 209, .14);
+  --df-line-strong: rgba(213, 191, 123, .34);
+
+  /* ---- 面板背景 ---- */
+  --df-panel-bg: var(--panel-soft, rgba(25, 36, 31, .58));
+  --df-panel-bg-deep: var(--panel-deep, rgba(10, 17, 16, .78));
+
+  /* ---- 语义色：事件四态 ---- */
+  --df-sent-pos: #E0584F;   /* 利好：红 */
+  --df-sent-neg: #4FB38A;   /* 利空：绿 */
+  --df-sent-neu: #D9B44A;   /* 中性：黄 */
+  --df-sent-routine: #7FB8E6; /* Routine 类（资金情绪敏感）：浅蓝 */
+
+  /* ---- 语义色：涨跌（红涨绿跌） ---- */
+  --df-up: #ef5b5b;
+  --df-down: #50b889;
+
+  /* ---- 过渡 ---- */
+  --df-ease: cubic-bezier(.16, 1, .3, 1);
+  --df-ease-snap: cubic-bezier(.22, .8, .2, 1);
+}
+
+/* ---- 玻璃面板基础类（下沉镜面感） ---- */
+.df-glass {
+  position: relative;
+  background: var(--df-glass-bg);
+  border: var(--df-glass-border);
+  border-radius: var(--df-radius-lg);
+  backdrop-filter: blur(var(--df-glass-blur)) saturate(var(--df-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--df-glass-blur)) saturate(var(--df-glass-saturate));
+  box-shadow: var(--df-shadow-md), var(--df-shadow-inset);
+}
+
+/* ---- 标题重影（字体沉在玻璃之下） ---- */
+.df-ghost-title {
+  color: var(--df-ink-strong);
+  text-shadow: var(--df-ghost-shadow);
+  letter-spacing: -.015em;
+}

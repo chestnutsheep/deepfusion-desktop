@@ -5,7 +5,7 @@
   "identifier": "com.deepfusion.desktop",
   "build": {
     "beforeDevCommand": "npm run dev -- --port 5188",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build --prefix \"..\"",
     "devUrl": "http://localhost:5188",
     "frontendDist": "../dist"
   },
@@ -34,7 +34,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb"],
     "icon": ["icons/icon.png"]
   }
 }
