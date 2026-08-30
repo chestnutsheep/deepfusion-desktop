@@ -1,16 +1,9 @@
-use std::os::unix::process::CommandExt;
-use std::process::Command;
 use std::sync::Mutex;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, Position, Size};
 
-/// 后端服务子进程（独立进程组，便于整组 kill）。
-/// None 表示后端未启动。
-struct BackendState(Mutex<Option<BackendHandle>>);
-
-struct BackendHandle {
-    /// 进程组 ID（即 spawn 出的 bash 子进程 pid，也是 serve.py 进程组组长）。
-    pgid: u32,
-}
+/// 后端服务状态：面板不再 spawn/管理后端（改由独立 DF Server 脚本/按钮管控），
+/// 此 state 仅用于记录“面板是否探测到后端在线”，避免重复探测。
+struct BackendState(Mutex<Option<bool>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
