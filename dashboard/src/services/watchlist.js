@@ -1,7 +1,59 @@
 import { invoke } from '@tauri-apps/api/core';
+import { logEvent } from './logs';
 
 const KEY = 'deepfusion.watchlist.v1';
 const MAX = 30;
+
+// —— 后端存活熔断（防止 5173 连不上时前端自杀式重试打满主线程）——
+// 后端连续失败达到阈值后进入“熔断”状态，在冷却期内所有 mcpTool 调用直接短路返回，
+// 不再发起网络请求；冷却结束后用一次探活请求恢复。彻底避免 ECONNREFUSED 刷屏导致卡成 PPT。
+const BACKEND_OK = { alive: true, fails: 0, cooldownUntil: 0 };
+const FAIL_THRESHOLD = 3;     // 连续失败几次后触发熔断
+const COOLDOWN_MS = 15_000;   // 熔断冷却时长（期间直接短路）
+const PROBE_NAME = 'search';  // 探活用的轻量工具
+
+async function probeBackend() {
+  try {
+    const res = await fetch('/api/tools/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: PROBE_NAME, arguments: { keyword: 'SH', market: 'sh' } }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 后端不可达时返回 true，调用方应直接短路（返回缓存/null），不再发请求 */
+async function backendUnavailable() {
+  if (BACKEND_OK.alive) return false;
+  if (Date.now() >= BACKEND_OK.cooldownUntil) {
+    // 冷却结束，探活一次决定是否恢复
+    const ok = await probeBackend();
+    if (ok) {
+      BACKEND_OK.alive = true;
+      BACKEND_OK.fails = 0;
+      return false;
+    }
+    BACKEND_OK.cooldownUntil = Date.now() + COOLDOWN_MS;
+  }
+  return true;
+}
+
+function recordBackendResult(ok) {
+  if (ok) {
+    BACKEND_OK.alive = true;
+    BACKEND_OK.fails = 0;
+  } else {
+    BACKEND_OK.fails += 1;
+    if (BACKEND_OK.fails >= FAIL_THRESHOLD) {
+      BACKEND_OK.alive = false;
+      BACKEND_OK.cooldownUntil = Date.now() + COOLDOWN_MS;
+      logEvent('warn', 'mcpTool', `后端连续失败${BACKEND_OK.fails}次，进入熔断冷却 ${COOLDOWN_MS}ms`);
+    }
+  }
+}
 
 /** 自动把持仓落盘到磁盘（~/.config/deepfusion/watchlist.json，独立于 WebView 缓存） */
 export async function persistBackup(list) {
@@ -121,24 +173,63 @@ export function splitPortfolio(list) {
 }
 
 /**
+ * 行情本地缓存（localStorage）：避免每次刷新都重新打网络，首屏/轮询先读缓存即时渲染。
+ * 缓存有效期 20s，超过则视为过期、下次刷新时静默更新。
+ */
+const QUOTE_CACHE_KEY = 'df_quote_cache_v1';
+const QUOTE_CACHE_TTL = 20_000;
+
+function loadQuoteCache() {
+  try {
+    const raw = localStorage.getItem(QUOTE_CACHE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function saveQuoteCache(code, quote) {
+  try {
+    const all = loadQuoteCache();
+    all[code] = { quote, ts: Date.now() };
+    localStorage.setItem(QUOTE_CACHE_KEY, JSON.stringify(all));
+  } catch {
+    /* 忽略写入失败（隐私模式等） */
+  }
+}
+
+/** 只读缓存（不触发网络），供首屏/初始化即时渲染 */
+export function getCachedQuote(code) {
+  const all = loadQuoteCache();
+  const hit = all[code];
+  if (hit && Date.now() - hit.ts < QUOTE_CACHE_TTL) return hit.quote;
+  return null;
+}
+
+/**
  * 拉取单只股票实时行情
  * 复用 WebUI 后端的 mcp 工具 stock_quote（参数名为 symbol，返回 data 为 JSON 字符串）
  * 字段：symbol, name, price, prev_close, change, change_pct, pe, pb, total_mv, turnover ...
+ * 结果写入本地缓存（带时间戳），下次刷新可即时复用。
  */
 export async function fetchQuote(code) {
+  // 熔断：后端不可达时直接回退缓存，不发请求
+  if (await backendUnavailable()) return getCachedQuote(code);
   try {
-    const res = await fetch('http://127.0.0.1:5173/api/tools/call', {
+    const res = await fetch('/api/tools/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'stock_quote', arguments: { symbol: code, market: inferMarket(code) } }),
     });
     const json = await res.json();
-    if (!json?.ok) return null;
+    recordBackendResult(json?.ok !== false);
+    if (!json?.ok) return getCachedQuote(code); // 网络失败回退缓存
     // data 可能是 JSON 字符串，也可能是对象
     const raw = typeof json.data === 'string' ? safeParse(json.data) : json.data;
     const item = Array.isArray(raw) ? raw.find((x) => String(x.symbol) === String(code)) : raw;
-    if (!item) return null;
-    return {
+    if (!item) return getCachedQuote(code);
+    const quote = {
       lastPrice: Number(item.price ?? item.lastPrice ?? 0),
       changePct: Number(item.change_pct ?? item.changePct ?? 0),
       change: Number(item.change ?? 0),
@@ -146,8 +237,11 @@ export async function fetchQuote(code) {
       pe: item.pe ?? null,
       pb: item.pb ?? null,
     };
+    saveQuoteCache(code, quote);
+    return quote;
   } catch {
-    return null;
+    recordBackendResult(false);
+    return getCachedQuote(code);
   }
 }
 
@@ -163,22 +257,36 @@ export function inferMarket(code) {
   return 'sh';
 }
 
-const MCALL = 'http://127.0.0.1:5173/api/tools/call';
+const MCALL = '/api/tools/call';
 
 async function mcpTool(name, args) {
+  // 熔断：后端不可达时直接短路，不发请求（避免 ECONNREFUSED 刷屏打满主线程）
+  if (await backendUnavailable()) return null;
   try {
+    logEvent('info', 'mcpTool', `POST ${MCALL} name=${name}`);
     const res = await fetch(MCALL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, arguments: args }),
     });
+    logEvent('info', 'mcpTool', `status=${res.status} ok=${res.ok}`, { name });
     const json = await res.json();
-    if (!json?.ok) return null;
+    if (!json?.ok) {
+      logEvent('error', 'mcpTool', `后端返回 ok=false（${name}）`, json?.error || json);
+      recordBackendResult(false);
+      return null;
+    }
+    recordBackendResult(true);
     return typeof json.data === 'string' ? safeParse(json.data) : json.data;
-  } catch {
+  } catch (e) {
+    logEvent('error', 'mcpTool', `请求失败（${name}）：${e.message}`, e.stack || String(e));
+    recordBackendResult(false);
     return null;
   }
 }
+
+/** 供其他模块复用：直接调用 DeepFusion 后端 MCP 工具 */
+export { mcpTool, parseHistCsv };
 
 /**
  * 从 DeepFusion 后端补全元数据：名称（search）+ 行业/概念（stock_concepts）
@@ -247,6 +355,22 @@ export async function fetchIntraday(code, limit = 240) {
   }
 }
 
+/** 获取最近 N 个交易日的日 K 收盘序列（用于大卡背景衬垫） */
+export async function fetchDailyK(code, limit = 60) {
+  try {
+    const text = await mcpTool('individual_hist', {
+      symbol: code,
+      period: 'daily',
+      limit,
+    });
+    const series = parseHistCsv(text, 'K线数据') || parseHistCsv(text, '日线');
+    if (!series || series.length < 2) return null;
+    return series.slice(-limit).map((d) => ({ time: d.time, price: d.price }));
+  } catch {
+    return null;
+  }
+}
+
 /** 带行情的持仓项 */
 export async function enrichWatch(w) {
   const q = await fetchQuote(w.code);
@@ -271,7 +395,8 @@ export async function enrichWatch(w) {
  *        dayProfit, positions:[{...w, marketValue, profit, profitPct, weight}],
  *        tags:{tag, marketValue, weight}[], topGain, topLoss }
  */
-export function analyzePortfolio(holdings, enrichedMap) {
+export function analyzePortfolio(holdings, enrichedMap, availableCash = 0) {
+  const cash = Number(availableCash) || 0;
   const positions = holdings.map((w) => {
     const q = enrichedMap.get(w.code)?.quote;
     const last = q?.lastPrice ?? w.cost ?? 0;
@@ -290,7 +415,9 @@ export function analyzePortfolio(holdings, enrichedMap) {
   const totalProfitPct = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0;
   const dayProfit = positions.reduce((s, p) => s + p.dayProfit, 0);
 
-  positions.forEach((p) => (p.weight = totalMarketValue > 0 ? (p.marketValue / totalMarketValue) * 100 : 0));
+  // 仓位占比：持仓市值 /（持仓市值 + 可用资金），可用资金为 0 时退回纯持仓占比
+  const base = totalMarketValue + cash;
+  positions.forEach((p) => (p.weight = base > 0 ? (p.marketValue / base) * 100 : 0));
 
   // 按 tag 聚合
   const tagMap = new Map();

@@ -52,13 +52,34 @@
 - ⚠️ **API 契约（验证 server 必须按此，8-30 教训）**：调用前**先看 `serve.py` 的真实返回格式**，别盲调。
   - `GET /api/tools/list` → `{"ok": true, "tools": [名字字符串...]}`（不是对象数组）。
   - `POST /api/tools/call` body `{"name":..., "arguments":{...}}` → 返回 `{"ok": true, "data": <text字符串>, "updatedAt": ...}`。**工具结果在 `data` 字段，不是 `content`/`result.content`**。之前误读 `content` 字段误判"数据空"，实为协议读错。
-  - 启动：`cd deepfusion-server && uv run python serve.py`（默认 5173）。验证：list=177 工具；`report_latest({rtype:"premarket"})`/`limit_up_latest`/`cycle_nesting` 均返回真实数据（带恢复后的 data/*.db）。`deepfusion-webui` 的 `npm run dev` 起 **8080**（WebUI vite，proxy `/api/*`→5173）。面板只依赖 5173。
+  - 启动：`cd deepfusion-server && uv run python serve.py`（默认 5173）。验证：list=177 工具；`report_latest({rtype:"premarket"})`/`limit_up_latest`/`cycle_nesting` 均返回真实数据（带恢复后的 data/*.db）。
+- ⚠️ **环境坑（8-30 解决）**：本机 `fs.inotify.max_user_watches` 默认仅 65536，导致 `tauri dev` / vite dev 的 watcher 报 `ENOSPC: System limit for number of file watchers reached`。已用 `echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p` 调大到 524288（已持久化到 /etc/sysctl.conf）。**重装系统后需重设**。
+- ⚠️ **desktop lib.rs 编译坑**：`read_doc` 用 `DEEP_FUSION_HOME`（默认 `/home/AI/workspace/Mcp Server/DeepFusion`），`Path::new(root)` 必须写成 `Path::new(&root)`（root 是 String）。漏 `&` 会编译失败 E0308。
+- **三模块启动顺序**（dev 联调）：① 后端 `deepfusion-server` 起 5173 → ② `deepfusion-webui` `npm run dev` 起 8080（proxy→5173）→ ③ `deepfusion-desktop` `npm run desktop:dev`（tauri dev，前端 5188，窗口连 5173）。desktop 与 webui 都依赖 5173 才能取数。`deepfusion-webui` 的 `npm run dev` 起 **8080**（WebUI vite，proxy `/api/*`→5173）。面板只依赖 5173。
 - **面板接 DeepFusion 数据方式**：HTTP 直连 `127.0.0.1:5173/api/tools/call`（非 Tauri mcp 插件）。
 - **名称/行业/概念来源**：`stock_quote` 不含 name；名称靠 `search`、概念靠 `stock_concepts(symbol, market)`（须带 market）。`watchlist.js` 的 `fetchMeta` 已回填，后端没起时降级手填。
 
 ## DeepFusion 项目内 MCP
 - `DeepFusion/server.json` 的 mcp 配置是给 Claude Desktop 用的（Windows 路径 `G:\PycharmProjects\DeepFusion` + 7897 代理，本机不可用）。真实 stdio 入口：`uv run deep-fusion`（`pyproject.toml` 的 `[project.scripts] deep-fusion = "deep_fusion:main"`），本机 uv 可用。但面板未采用此方式。
 - DeepFusion 后端启动：`cd DeepFusion && uv run serve.py`（uvicorn, 端口 5173）。WebUI 前端：`cd DeepFusion/dashboard && npm run dev`（vite, 端口 8080）。
+
+## 用户技术指标实战心得（2026-08-30 亲述，非教科书视角，务必尊重）
+- **MACD**：
+  - 金叉死叉看整体趋势涨跌，但弊端是 MACD 显颓势时价格**早已发生或轻或重的回落**；急庄可能直接跳水没反应时间。
+  - **MACD 柱的加速度（即二阶导数）**：加速度见顶**先于** MACD 柱。传统 MACD 把"零轴"当判断标准，但二阶导数天然多一层"增速大小"概念。加速度>0 时 MACD 始终增长；加速度开始回落时动能减弱但向上趋势仍在 → **可在利润未被侵蚀前跑路**。
+  - **水上/水下**：金叉与零线位置关系：水下金叉 < 二次金叉 < 水上金叉 < **三全项**（水下金叉+二次金叉+底背离）。底背离=股价近期新低而 DIF 未同步新低，形成底背离结构。
+- **KDJ**：趋势市会**钝化**（>120 是常态），须先经 DMI 划分"趋势市 vs 震荡市"再决定用不用。
+- **MA 系**：长线组运行在股价**下方**的上涨更持久；短线 MA 同样存在加速度概念（同 MACD 逻辑，不赘述）。
+- **WR（威廉指标）**：用户明确认为**没用，建议删掉**。
+- **CCI**：仅在**极端趋势市**好使，有限制。
+- **量价时空（核心方法论）**：指标只是 OHLCV 的衍生，Level2 不可得时，**回到量价关系 + 日内多周期**视角常有奇效。
+  - **量五等级**（以前一交易日 + VMA(5) 为参照）：倍量(天量) / 增量(放量) / 量平 / 缩量 / 腰斩(地量)。
+  - **价**：一般直接反映流入资金（无狗庄前提下）；健康上涨应伴随**成交量成比例温和放大**；任何"非成比例"的成交量变化本身就是信号。
+  - 更多量化细节见本机电脑中关于量化分析的文件（用户提示可检索）。
+
+## 语言偏好（极重要，2026-08-30 明确）
+- **用户母语是中文，中文最自然最好读**；偶尔切英文只是因为"中文打字成本高、懒得多敲字"，**不代表想用英文交流**。
+- **硬性约定：无论用户用中文还是英文沟通，我一律用中文回复。** 不因对方用英文就跟着切英文。
 
 ## 用户习惯 / 工作约定（务必遵守）
 - **改完即清残留**：每次修改后主动删除旧版本产物与缓存，避免版本混乱。清单：

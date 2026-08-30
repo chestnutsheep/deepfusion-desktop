@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Panel, Eyebrow, Metric } from '../design/Primitives';
+import { usePortfolio } from '../shared/portfolioStore';
 
 const KEY = 'deepfusion.allocation.v1';
 
@@ -22,24 +23,33 @@ const PRESET = [
 export default function AssetAllocationPanel() {
   const [rows, setRows] = useState(load);
   const [editing, setEditing] = useState(null);
+  const { equity, cash } = usePortfolio();
   const [draftName, setDraftName] = useState('');
   const [draftCur, setDraftCur] = useState('');
   const [draftTgt, setDraftTgt] = useState('');
 
   useEffect(() => { save(rows); }, [rows]);
 
+  // 联动：把全局持仓市值注入「权益」类、可用资金注入「现金/货基」类，自动参与配置统计
+  const linkedRows = useMemo(() => rows.map((r) => {
+    const n = (r.name || '').replace(/[（）()\s]/g, '');
+    if (/权益|股票/.test(n)) return { ...r, current: equity, linked: true };
+    if (/现金|货基/.test(n)) return { ...r, current: cash, linked: true };
+    return r;
+  }), [rows, equity, cash]);
+
   const stats = useMemo(() => {
-    const total = rows.reduce((s, r) => s + (Number(r.current) || 0), 0) || 1;
-    const enriched = rows.map((r) => {
+    const total = linkedRows.reduce((s, r) => s + (Number(r.current) || 0), 0) || 1;
+    const enriched = linkedRows.map((r) => {
       const cur = Number(r.current) || 0;
       const tgt = Number(r.target) || 0;
       const curPct = (cur / total) * 100;
       const dev = curPct - tgt;
       return { ...r, curPct, dev };
     });
-    const sumTarget = rows.reduce((s, r) => s + (Number(r.target) || 0), 0);
+    const sumTarget = linkedRows.reduce((s, r) => s + (Number(r.target) || 0), 0);
     return { enriched, total, sumTarget };
-  }, [rows]);
+  }, [linkedRows]);
 
   const addRow = () => {
     if (!draftName.trim()) return;
@@ -83,8 +93,14 @@ export default function AssetAllocationPanel() {
                 <span>{r.target}%</span>
                 <b className={r.dev >= 0 ? 'up' : 'down'}>{r.dev >= 0 ? '+' : ''}{r.dev.toFixed(1)}%</b>
                 <span className="alloc-ops">
-                  <button className="focus-toggle" onClick={() => setEditing(idx)}>改</button>
-                  <button className="focus-toggle" onClick={() => removeRow(idx)}>删</button>
+                  {r.linked ? (
+                    <span className="alloc-linked" title="由持仓/可用资金自动同步">自动</span>
+                  ) : (
+                    <>
+                      <button className="focus-toggle" onClick={() => setEditing(idx)}>改</button>
+                      <button className="focus-toggle" onClick={() => removeRow(idx)}>删</button>
+                    </>
+                  )}
                 </span>
               </>
             )}

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { mcp } from '../services/mcp';
 import { Panel, Eyebrow } from '../design/Primitives';
 import { readDeveloperMode, writeDeveloperMode } from '../shared/storage';
+import { getLogs, clearLogs } from '../services/logs';
 
 const apiBaseUrl = mcp.apiBaseUrl;
 
@@ -64,6 +65,39 @@ function MemorySection({ kind }) {
                 ? <><button className="focus-toggle" onClick={() => save(item.id)}>保存</button><button className="focus-toggle" onClick={() => setEditingId(null)}>取消</button></>
                 : <><button className="focus-toggle" onClick={() => { setEditingId(item.id); setDraft(item.content || ''); }}>纠偏</button><button className="focus-toggle" onClick={() => fetch(`${apiBaseUrl}/api/butler/context`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: kind.key, id: item.id }) }).then(reload).catch(reload)}>删除</button></>}
             </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function LogsSection() {
+  const [logs, setLogs] = useState([]);
+  const refresh = () => setLogs(getLogs());
+  useEffect(() => { refresh(); }, []);
+  const levelClass = (lv) => (lv === 'error' ? 'lv-error' : lv === 'warn' ? 'lv-warn' : 'lv-info');
+  return (
+    <Panel
+      module="butler"
+      title="运行日志"
+      actions={
+        <>
+          <button className="focus-toggle" onClick={refresh}>刷新 <span>↻</span></button>
+          <button className="focus-toggle" onClick={() => { clearLogs(); setLogs([]); }}>清空</button>
+        </>
+      }
+    >
+      <p className="memory-hint">前端运行日志（报错 / mcpTool 失败 / 全局异常），用于排查技术分析不显示等问题。最新 200 条，存于本地。</p>
+      <div className="logs-box">
+        {logs.length === 0 && <div className="capability-empty">暂无日志记录。</div>}
+        {logs.slice().reverse().map((e, i) => (
+          <div className={`log-row ${levelClass(e.level)}`} key={i}>
+            <span className="log-time">{e.t?.slice(11, 19)}</span>
+            <span className="log-level">{e.level}</span>
+            <span className="log-source">{e.source}</span>
+            <span className="log-msg">{e.message}</span>
+            {e.detail && <pre className="log-detail">{typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail)}</pre>}
           </div>
         ))}
       </div>
@@ -151,6 +185,8 @@ export default function SettingsPage({ config, reports, onOpenReports }) {
           </div>
           <button className="focus-toggle" onClick={onOpenReports}>进入日报中心 <span>→</span></button>
         </Panel>
+
+        <LogsSection />
       </div>
     </section>
   );

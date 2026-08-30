@@ -96,7 +96,7 @@ fn spawn_backend(state: &tauri::State<BackendState>) -> Result<u32, String> {
     // 后端服务目录通过环境变量 DEEP_FUSION_HOME 指定（缺省回落原路径）。
     // 解耦 desktop panel 与后端仓库的物理位置，便于后端独立为 deepfusion-server 模块。
     let deepfusion_dir = std::env::var("DEEP_FUSION_HOME")
-        .unwrap_or_else(|_| "/home/AI/workspace/Mcp Server/DeepFusion".to_string());
+        .unwrap_or_else(|_| "/home/AI/workspace/Mcp Server/deepfusion-server".to_string());
     // 直接 spawn bash，并用 process_group(0) 使其成为新进程组组长，
     // 这样 child.id() == pgid，stop_backend 用 killpg(pgid) 即可整组清除后端。
     let child = Command::new("bash")
@@ -195,8 +195,8 @@ fn read_doc(relative: String) -> Result<String, String> {
     }
     // 文档读取根目录同样走 DEEP_FUSION_HOME，与后端位置保持一致。
     let root = std::env::var("DEEP_FUSION_HOME")
-        .unwrap_or_else(|_| "/home/AI/workspace/Mcp Server/DeepFusion".to_string());
-    let base = std::path::Path::new(root);
+        .unwrap_or_else(|_| "/home/AI/workspace/Mcp Server/deepfusion-server".to_string());
+    let base = std::path::Path::new(&root);
     let full = base.join(&relative);
     let target = if full.is_dir() {
         full.join("SKILL.md")

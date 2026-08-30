@@ -14,12 +14,16 @@ import WatchlistPanel from './components/WatchlistPanel';
 import EventGrid from './components/EventGrid';
 import SettingsPage from './pages/SettingsPage';
 import AssetAllocationPanel from './components/AssetAllocationPanel';
+import FuturesPanel from './components/FuturesPanel';
 import ConceptDeconstructPanel from './components/ConceptDeconstructPanel';
 import MethodologyPanel from './components/MethodologyPanel';
 import { Eyebrow } from './design/Primitives';
+import { installGlobalLogCapture } from './services/logs';
 import './styles.css';
 
-const navItems = [['概览', '⌂'], ['日报', '✉'], ['设置', '⚙'], ['资产', '◧'], ['概念', '⊞'], ['方法论', '❖'], ['任务', '◫'], ['市场', '⌁'], ['文件', '⌑'], ['专注', '◌']];
+installGlobalLogCapture();
+
+const navItems = [['概览', '⌂'], ['日报', '✉'], ['设置', '⚙'], ['资产', '◧'], ['期货', '⬢'], ['概念', '⊞'], ['方法论', '❖'], ['任务', '◫'], ['市场', '⌁'], ['文件', '⌑'], ['专注', '◌']];
 const schedule = [
   { time: '09:00', title: '盘前信息简报', meta: '本地任务 · 预计 2 分钟', state: '就绪', target: '日报' },
   { time: '12:50', title: '午间新闻驱动扫描', meta: '采集 · 分析 · 推送候选项', state: '待运行', target: '市场' },
@@ -336,11 +340,12 @@ function App() {
     try {
       const window = getCurrentWindow();
       await window.setFullscreen(false);
-      // 最小化到任务栏，而非彻底 hide（hide 后无可见恢复入口）
-      if (typeof window.minimize === 'function') await window.minimize();
-      else await window.hide();
+      // Wayland 下 minimize() 常被 compositor 忽略（点击无反应），
+      // 直接 hide() 更可靠；restorePanel 已通过 show() 提供恢复入口。
+      if (typeof window.hide === 'function') await window.hide();
+      else if (typeof window.minimize === 'function') await window.minimize();
     } catch (error) {
-      console.error('[desktop] minimize panel failed', error);
+      console.error('[desktop] hide panel failed', error);
     }
   };
   const restorePanel = async () => {
@@ -443,18 +448,34 @@ function App() {
           {active === '市场' && <CapabilityPanel title="资金面动向" eyebrow="DEEPFUSION / CAPITAL FLOWS" items={capitalItems} empty="资金快照暂未落盘。" />}
           {active === '文件' && <CapabilityPanel title="政策文件索引" eyebrow="DEEPFUSION / POLICY LIBRARY" items={policyResults} empty="政策库暂无结果；本机文件浏览能力尚未接入。" />}
           {active === '资产' && <AssetAllocationPanel />}
+          {active === '期货' && <FuturesPanel />}
           {active === '概念' && <ConceptDeconstructPanel />}
           {active === '方法论' && <MethodologyPanel />}
           <section className="hero enter-one"><div><p className="eyebrow">TODAY / {now.toISOString().slice(0, 10)} <span className="theme-caption">· {theme.name} / {theme.tone}</span></p><h1 className="hero-motto"><span>Move with intention.</span><br /><i>Let the day unfold.</i></h1></div><button className="focus-toggle" onClick={() => setFocus(!focus)}>{focus ? '退出专注' : '进入专注'} <span>↗</span></button></section>
           {!focus && <div className="dashboard-grid">
             <div className="dashboard-main">
-              <WatchlistPanel extraClass="panel--primary" />
-              <div id="market-pulse" className="panel market panel--secondary"><MarketPulse now={now} onNote={setNote} /></div>
-              <DeepFusionBrief reports={reportRows} capitalFlows={capitalFlows} derivatives={derivatives} calendarEvents={calendarEvents} extraClass="panel--secondary" onOpenReports={(report) => report ? openReport(report) : openReportCenter()} />
+              <section className="content-block">
+                <div className="block-head"><div><Eyebrow module="watchlist">持仓追踪</Eyebrow><h2>持仓追踪</h2></div><span className="block-hint">个股 · 基金 · 盈亏 · 仓位</span></div>
+                <WatchlistPanel extraClass="panel--primary block-body" />
+              </section>
+              <section className="content-block">
+                <div className="block-head"><div><Eyebrow module="market">盘面脉搏</Eyebrow><h2>盘面脉搏</h2></div><span className="block-hint">资金面 · 涨跌家数 · 板块强度</span></div>
+                <div id="market-pulse" className="panel market panel--secondary block-body"><MarketPulse now={now} onNote={setNote} /></div>
+              </section>
+              <section className="content-block">
+                <div className="block-head"><div><Eyebrow module="overview">研究台摘要</Eyebrow><h2>研究台摘要</h2></div><button className="focus-toggle" onClick={() => openReportCenter()}>打开日报 <span>→</span></button></div>
+                <DeepFusionBrief reports={reportRows} capitalFlows={capitalFlows} derivatives={derivatives} calendarEvents={calendarEvents} extraClass="panel--secondary block-body" onOpenReports={(report) => report ? openReport(report) : openReportCenter()} />
+              </section>
             </div>
             <aside className="dashboard-aside">
-              <section className="panel agenda panel--secondary enter-two"><div className="panel-head"><div><Eyebrow module="agenda">今日任务安排</Eyebrow><h2>今日任务安排</h2></div><button onClick={() => setActive('任务')}>任务专区 <span>→</span></button></div><ScheduleTimeline now={now} onNavigate={navigateFromSchedule} /></section>
-              <section className="panel command panel--secondary enter-three"><Eyebrow module="note">工作备注</Eyebrow><h2>工作备注</h2><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="桌面便签" /><div className="note-footer"><span><i className="tiny-dot" /> 已自动保存</span><button onClick={() => setNote('已清空。')}>清空</button></div></section>
+              <section className="content-block">
+                <div className="block-head"><div><Eyebrow module="agenda">今日任务安排</Eyebrow><h2>今日任务安排</h2></div><button className="focus-toggle" onClick={() => setActive('任务')}>任务专区 <span>→</span></button></div>
+                <section className="panel agenda panel--secondary enter-two block-body"><ScheduleTimeline now={now} onNavigate={navigateFromSchedule} /></section>
+              </section>
+              <section className="content-block">
+                <div className="block-head"><div><Eyebrow module="note">工作备注</Eyebrow><h2>工作备注</h2></div></div>
+                <section className="panel command panel--secondary enter-three block-body"><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="桌面便签" /><div className="note-footer"><span><i className="tiny-dot" /> 已自动保存</span><button onClick={() => setNote('已清空。')}>清空</button></div></section>
+              </section>
             </aside>
           </div>}
         </>}
