@@ -335,6 +335,17 @@ button:focus-visible, textarea:focus-visible { outline:2px solid var(--theme-acc
 .ops-submit { padding:9px; border-radius:9px; border:1px solid color-mix(in srgb, var(--theme-accent) 50%, transparent); background:color-mix(in srgb, var(--theme-accent) 22%, transparent); color:#fff; cursor:pointer; font-size:14px; }
 .ops-submit:hover { background:color-mix(in srgb, var(--theme-accent) 36%, transparent); }
 .ops-hint { font-size:11px; color:var(--df-web-muted); line-height:1.5; margin:0; }
+.ops-closeout { border-top:1px dashed rgba(231,238,218,.16); padding-top:14px; display:flex; flex-direction:column; gap:10px; }
+.ops-closeout-line { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--df-web-secondary); }
+.ops-closeout-line label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--df-web-muted); }
+.ops-closeout-line input { width:96px; padding:6px 9px; border-radius:8px; border:1px solid rgba(231,238,218,.18); background:rgba(8,14,13,.7); color:var(--df-web-primary); font:500 13px var(--font-latin); }
+.ops-closeout-btn { align-self:flex-start; padding:8px 16px; border-radius:9px; border:1px solid rgba(220,120,120,.5); background:rgba(220,120,120,.16); color:#ffd9d9; cursor:pointer; font-size:13px; }
+.ops-closeout-btn:hover { background:rgba(220,120,120,.28); }
+.ops-confirm { margin-top:4px; padding:12px 14px; border-radius:10px; background:rgba(8,14,13,.6); border:1px solid rgba(231,238,218,.14); display:flex; flex-direction:column; gap:10px; }
+.ops-confirm p { margin:0; font-size:12px; line-height:1.6; color:var(--df-web-secondary); }
+.ops-confirm-actions { display:flex; gap:8px; }
+.ops-confirm-yes { padding:7px 14px; border-radius:8px; border:1px solid rgba(220,120,120,.5); background:rgba(220,120,120,.22); color:#ffd9d9; cursor:pointer; font-size:13px; }
+.ops-confirm-no { padding:7px 14px; border-radius:8px; border:1px solid rgba(231,238,218,.18); background:transparent; color:var(--df-web-secondary); cursor:pointer; font-size:13px; }
 .td-loading,.td-error { padding:48px 24px; text-align:center; color:var(--df-web-muted); font-size:15px; }
 .td-error { color:#ff9a9a; }
 .td-body { padding:16px 24px 24px; overflow-y:auto; display:flex; flex-direction:column; gap:18px; }

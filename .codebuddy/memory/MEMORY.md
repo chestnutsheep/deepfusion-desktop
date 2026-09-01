@@ -28,6 +28,13 @@
   - 修复：用 `{active === '概览' && <>` 包裹整段概览区块（`main.jsx` renderView 的 else 分支）。
   - 教训：desktop 的视图切换必须用 `active` 条件包裹各自区块，绝不可常驻渲染某视图导致叠加。
 
+## 工作习惯 / 构建规范（用户明确要求）
+- **清理旧产物、保证版本唯一**：每次重新构建前/后，删除旧的打包产物，避免老旧缓存被误用。
+  - deepfusion-desktop：删 `src-tauri/target/release/bundle/deb/*.deb` 及解包目录，再 `npm run desktop:build` 生成全新唯一包。
+  - **不要手动删整个 `target/`**（会丢失 Rust 依赖编译缓存，下次 build 极慢）；只清 `bundle/deb/` 下的旧包。
+  - 前端 `dist/` 由 `vite build` 自动整体覆盖，天然唯一，无需手动清。
+- 用户强调：持仓数据不能被更新版本删掉（构建/更新动作不得触碰数据层）。
+
 ## 桌面入口状态（截至 2026-09-01）
 - DF Web 应用菜单入口：`~/.local/share/applications/deepfusion-web.desktop`（已建）。
 - DF Web 桌面图标：`/home/scapegoat/桌面/df-web.desktop`（已建，需 chmod+x + gio trusted）。

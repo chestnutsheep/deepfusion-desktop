@@ -9,13 +9,18 @@ const KIND_META = {
   note: { label: '备注', sign: '' },
 };
 
-export default function PositionOpsModal({ item, onClose }) {
+export default function PositionOpsModal({ item, onClose, onCloseout }) {
   const ops = item.ops || [];
   const [kind, setKind] = useState('t');
   const [price, setPrice] = useState('');
   const [shares, setShares] = useState('');
   const [tProfit, setTProfit] = useState(''); // 做T/分红: 本次已实现利润（元，正=摊低成本）
+  const [closePrice, setClosePrice] = useState(''); // 清仓价
+  const [closing, setClosing] = useState(false);
   const [note, setNote] = useState('');
+
+  const cur = applyOps(item);
+  const curShares = cur.curShares;
 
   const submit = () => {
     const p = parseFloat(price) || 0;
@@ -37,6 +42,28 @@ export default function PositionOpsModal({ item, onClose }) {
     };
     pushOp(item.code, op);
     setPrice(''); setShares(''); setTProfit(''); setNote('');
+  };
+
+  // 清仓：平掉全部持股（shares 归 0），回笼资金交回上级，标的保留为关注（不删除、不丢历史）
+  const handleCloseout = () => {
+    if (closing) return;
+    if (curShares <= 0) return;
+    const priceNum = parseFloat(closePrice) || Number(item.cost) || 0;
+    const proceeds = Math.round(priceNum * curShares * 100) / 100; // 回笼资金（元）
+    const op = {
+      id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      date: new Date().toISOString().slice(0, 10),
+      kind: 'sell',
+      price: priceNum,
+      shares: curShares, // 一次性减到 0
+      costDelta: 0,
+      note: `清仓（回笼 ${proceeds.toFixed(2)} 元）`,
+    };
+    pushOp(item.code, op);
+    setClosing(false);
+    setClosePrice('');
+    if (onCloseout) onCloseout(item.code, proceeds); // 回笼资金加回可用资金
+    onClose();
   };
 
   const op = applyOps(item);
@@ -99,8 +126,28 @@ export default function PositionOpsModal({ item, onClose }) {
             </div>
           )}
           <button className="ops-submit" onClick={submit}>记录操作</button>
+
+          {curShares > 0 && (
+            <div className="ops-closeout">
+              <div className="ops-closeout-line">
+                <span>清仓（平掉全部 {curShares} 股，回笼资金）</span>
+                <label>清仓价<input value={closePrice} onChange={(e) => setClosePrice(e.target.value)} placeholder={`默认 ${item.cost || 0}`} /></label>
+              </div>
+              <button className="ops-closeout-btn" onClick={() => setClosing(true)}>清仓</button>
+              {closing && (
+                <div className="ops-confirm">
+                  <p>确认清仓 <b>{item.name}({item.code})</b> 全部 {curShares} 股？回笼资金将加回可用资金，标的转为关注保留（不删除、不丢历史）。</p>
+                  <div className="ops-confirm-actions">
+                    <button className="ops-confirm-yes" onClick={handleCloseout}>确认清仓</button>
+                    <button className="ops-confirm-no" onClick={() => setClosing(false)}>取消</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <p className="ops-hint">
-            做T / 分红：股数不变，按"本次实现利润"摊薄每股成本（成本下降，盈亏更真实）。
+            做T / 分红：股数不变，按"本次实现利润"摊薄每股成本（成本下降，盈亏更真实）。清仓：股数归零，标的转为关注。
           </p>
         </div>
       </div>

@@ -564,7 +564,14 @@ export default function WatchlistPanel({ extraClass = '', running = true }) {
         />
       )}
       {opsItem && (
-        <PositionOpsModal item={opsItem} onClose={() => setOpsItem(null)} />
+        <PositionOpsModal
+          item={opsItem}
+          onClose={() => setOpsItem(null)}
+          onCloseout={(code, proceeds) => {
+            setAvailableCash((prev) => { const v = Math.round((prev + proceeds) * 100) / 100; saveCash(v); return v; });
+            setOpsItem(null);
+          }}
+        />
       )}
     </section>
   );
