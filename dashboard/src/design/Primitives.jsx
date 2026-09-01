@@ -19,11 +19,12 @@ export function Panel({ title, eyebrow, module, actions, children, className = '
   );
 }
 
-/** 箴言小标题：若不传 children，按 module 自动取引经据典名句。 */
+/** 箴言小标题：若不传 children，按 module 取「原著表达」（中文用书法体，外文用原著语言）。 */
 export function Eyebrow({ module, children, className = '' }) {
-  const text = children || getMaxim(module);
-  if (!text) return null;
-  return <p className={`eyebrow ${className}`}>{text}</p>;
+  if (children) return <p className={`eyebrow ${className}`}>{children}</p>;
+  const m = getMaximOriginal(module);
+  if (!m || !m.text) return null;
+  return <p className={`eyebrow eyebrow-${m.lang} ${className}`}>{m.text}</p>;
 }
 
 /** 指标数：大数字 + 标签 + 语义色。 */

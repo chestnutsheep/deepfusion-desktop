@@ -9,11 +9,14 @@ import {
   loadWatchlistSync,
   loadBackup,
   mcpTool,
+  resolveType,
   saveWatchlist,
   splitPortfolio,
   validateWatch,
 } from '../services/watchlist';
 import { setPortfolio } from '../shared/portfolioStore';
+import { applyOps } from '../services/watchlist';
+import PositionOpsModal from './PositionOpsModal';
 
 const CASH_KEY = 'deepfusion.availableCash.v1';
 const loadCash = () => { try { return Number(localStorage.getItem(CASH_KEY)) || 0; } catch { return 0; } };
@@ -24,12 +27,85 @@ const VIEWS = [
   { id: 'cards', label: '卡片' },
   { id: 'list', label: '列表' },
   { id: 'big', label: '大卡' },
+  { id: 'cluster', label: '簇视图' },
 ];
+
+/**
+ * 概念相关性聚类（纯前端，数据源 = 已有 sector / concepts，无需后端）。
+ * 思路：把每只标的的特征集合 = {sector} ∪ {concepts...}，用 Jaccard 相似度
+ * 度量两两关联度；sector 命中额外加权。再用并查集把关联度 > 0 的标的归到一个簇。
+ * 输出：[{ id, hue, members: [{ w, sim }] }]，sim 为组内相对锚点的关联度（0–1）。
+ * 同簇同色相、组内深浅由 sim 决定；簇间用色相区分。
+ */
+function buildClusters(rows) {
+  const feats = rows.map((w) => {
+    const set = new Set();
+    if (w.sector) set.add(`S:${w.sector}`);
+    (w.concepts || []).forEach((c) => set.add(`C:${c}`));
+    return set;
+  });
+  const n = rows.length;
+  if (n === 0) return [];
+  const simOf = (i, j) => {
+    const a = feats[i], b = feats[j];
+    if (a.size === 0 && b.size === 0) return 0;
+    let inter = 0;
+    for (const k of a) if (b.has(k)) inter += 1;
+    const uni = a.size + b.size - inter;
+    if (uni === 0) return 0;
+    let jac = inter / uni;
+    // sector 完全命中额外加权（行业归属是最强相关信号）
+    if (rows[i].sector && rows[i].sector === rows[j].sector) jac = Math.min(1, jac + 0.25);
+    return jac;
+  };
+  // 并查集归簇
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { parent[find(a)] = find(b); };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (simOf(i, j) > 0) union(i, j);
+    }
+  }
+  const groups = new Map();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(i);
+  }
+  const list = [...groups.values()];
+  // 色相分配：golden-ratio 步进，保证簇间区分度
+  const GOLDEN = 137.508;
+  return list.map((idxs, gi) => {
+    // 锚点 = 簇内特征最丰富的标的（集合最大），作为组内基准
+    const anchor = idxs.reduce((best, i) => (feats[i].size > feats[best].size ? i : best), idxs[0]);
+    const members = idxs.map((i) => ({
+      w: rows[i],
+      sim: i === anchor ? 1 : simOf(anchor, i),
+    }));
+    // 锚点排前
+    members.sort((a, b) => b.sim - a.sim);
+    const hue = (gi * GOLDEN) % 360;
+    return { id: gi, hue, members };
+  });
+}
 
 const fmt = (n, d = 2) =>
   n == null || isNaN(n) ? '—' : n.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d });
 const pct = (n) => (n == null || isNaN(n) ? '—' : `${n > 0 ? '+' : ''}${n.toFixed(2)}%`);
 const cls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat');
+
+/** 簇色：同色相 hue，明度/饱和度随关联度 sim（0–1）变化——关联度越高越深越亮 */
+const clusterColor = (hue, sim) => {
+  const s = 38 + sim * 34;          // 38%–72%
+  const l = 66 - sim * 26;          // 66%–40%（sim 高 → 更深）
+  return `hsl(${hue.toFixed(0)} ${s.toFixed(0)}% ${l.toFixed(0)}%)`;
+};
+const clusterColorSoft = (hue, sim) => {
+  const s = 38 + sim * 34;
+  const l = 66 - sim * 26;
+  return `hsla(${hue.toFixed(0)} ${s.toFixed(0)}% ${l.toFixed(0)}% / .18)`;
+};
 
 /** 分时走势 sparkline：未开盘/无数据时返回 null */
 function Sparkline({ data = [], color }) {
@@ -89,7 +165,7 @@ function DailyKBackground({ data = [], color, colorSoft }) {
   );
 }
 
-export default function WatchlistPanel({ extraClass = '' }) {
+export default function WatchlistPanel({ extraClass = '', running = true }) {
   const [rows, setRows] = useState([]);
   const [ready, setReady] = useState(false);
 
@@ -98,13 +174,13 @@ export default function WatchlistPanel({ extraClass = '' }) {
     loadWatchlist().then((list) => { setRows(list); setReady(true); });
   }, []);
 
-  // 数据就绪后自动刷新一次；之后每 30 秒轮询行情
+  // 只在「数据就绪」且「后端在线」时刷新一次，绝不自动轮询。
+  // 去掉 30s setInterval：轮询会在后端慢/挂时堆积挂起 Promise，曾导致 WebKit OOM 卡死。
+  // 后续刷新由用户手动操作（如切回面板/点击刷新）或后端状态从 false→true 时触发。
   useEffect(() => {
-    if (!ready || rows.length === 0) return;
+    if (!ready || rows.length === 0 || !running) return;
     refresh();
-    const timer = setInterval(refresh, 30_000);
-    return () => clearInterval(timer);
-  }, [ready, rows.length]);
+  }, [ready, rows.length, running]);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [reason, setReason] = useState('');
@@ -130,6 +206,9 @@ export default function WatchlistPanel({ extraClass = '' }) {
 
   // 技术分析详情面板（点击卡片/列表行打开）
   const [tech, setTech] = useState(null); // { code, name, data, loading }
+
+  // 持仓操作跟踪弹窗（点击「操作」打开）
+  const [opsItem, setOpsItem] = useState(null);
 
   const inferMarketLocal = (code) => {
     if (/^(60|68|9)/.test(code)) return 'sh';
@@ -157,6 +236,7 @@ export default function WatchlistPanel({ extraClass = '' }) {
 
   const { holdings, watches } = useMemo(() => splitPortfolio(rows), [rows]);
   const analysis = useMemo(() => analyzePortfolio(holdings, quoted, availableCash), [holdings, quoted, availableCash]);
+  const clusters = useMemo(() => buildClusters(rows), [rows]);
 
   const update = (next) => { setRows(next); saveWatchlist(next); };
 
@@ -184,6 +264,7 @@ export default function WatchlistPanel({ extraClass = '' }) {
     if (refreshingRef.current) return; // 上一轮未完成则跳过，不叠加
     refreshingRef.current = true;
     setBusy(true);
+    try {
     // 并发拉取持仓行情（原串行 await 逐只 → N×T 延迟，改为 Promise.all 一次性发出）
     const enrichedRows = await Promise.all(
       rows.map(async (w) => {
@@ -213,8 +294,13 @@ export default function WatchlistPanel({ extraClass = '' }) {
     );
     // 把总持仓市值与可用资金写进全局 store，供资产配置器联动
     setPortfolio({ equity: analysis.totalMarketValue, cash: availableCash });
-    setBusy(false);
-    refreshingRef.current = false; // 释放并发锁
+    } catch (err) {
+      // 后端不可用时 enrichWatch/fetchDailyK 会抛错，静默跳过，不让 Promise 风暴拖垮 UI
+      console.warn('[WatchlistPanel] refresh skipped (backend likely unavailable):', err?.message || err);
+    } finally {
+      setBusy(false);
+      refreshingRef.current = false; // 无论成败都释放并发锁
+    }
   };
 
   const remove = (code) => update(rows.filter((r) => r.code !== code));
@@ -249,9 +335,11 @@ export default function WatchlistPanel({ extraClass = '' }) {
     const trendColor = live?.changePct > 0 ? '#ef5b5b' : live?.changePct < 0 ? '#50b889' : '#aeb8aa';
   const trendColorSoft = live?.changePct > 0 ? 'rgba(239,91,91,.22)' : live?.changePct < 0 ? 'rgba(80,184,137,.22)' : 'rgba(174,184,170,.2)';
     const dailySeries = dailyK.get(w.code) || [];
+    const t = resolveType(w);
+    const typeLabel = t === 'stock' ? '个股' : t === 'etf' ? 'ETF' : '基金';
     const el = (
       <article
-        className={`watch-row${pos ? ' holding' : ''}${big ? ' big' : ''}`}
+        className={`watch-row type-${t}${pos ? ' holding' : ''}${big ? ' big' : ''}`}
         key={w.code}
         role="button"
         tabIndex={0}
@@ -263,7 +351,7 @@ export default function WatchlistPanel({ extraClass = '' }) {
         <div className="watch-main">
           <strong>{w.name || w.code}</strong>
           {w.name && <span className="watch-code">{w.code}</span>}
-          <span className={`watch-type-badge ${w.type === 'fund' ? 'fund' : 'stock'}`}>{w.type === 'fund' ? '基金' : '个股'}</span>
+          <span className={`watch-type-badge ${t}`}>{typeLabel}</span>
           {w.sector && <span className="watch-sector">{w.sector}</span>}
           {!big && w.tag && <span className="watch-tagmini">{w.tag}</span>}
         </div>
@@ -296,7 +384,12 @@ export default function WatchlistPanel({ extraClass = '' }) {
             </div>
           </div>
         )}
-        <div className="watch-actions"><button onClick={(e) => { e.stopPropagation(); remove(w.code); }}>删除</button></div>
+        <div className="watch-actions">
+          {pos && (
+            <button className="lr-ops-btn" onClick={(e) => { e.stopPropagation(); setOpsItem(w); }}>操作跟踪</button>
+          )}
+          <button onClick={(e) => { e.stopPropagation(); remove(w.code); }}>删除</button>
+        </div>
       </article>
     );
     return el;
@@ -431,11 +524,22 @@ export default function WatchlistPanel({ extraClass = '' }) {
                   <span className={`lr-pct ${cls(live?.changePct)}`}>{pct(live?.changePct)}</span>
                   <span className="lr-price">{live?.lastPrice != null ? live.lastPrice.toFixed(2) : '—'}</span>
                   {pos && <span className={`lr-profit ${cls(pos.profit)}`}>{pos.profit >= 0 ? '+' : ''}{fmt(pos.profit)}</span>}
-                  <button onClick={(e) => { e.stopPropagation(); remove(w.code); }}>✕</button>
+                  <span className="lr-act">
+                    {w.type === 'hold' && (
+                      <button
+                        className="lr-ops-btn"
+                        title="操作跟踪（做T/加减仓/分红）"
+                        onClick={(e) => { e.stopPropagation(); setOpsItem(w); }}
+                      >操作</button>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); remove(w.code); }}>✕</button>
+                  </span>
                 </div>
               );
             })}
           </>
+        ) : view === 'cluster' ? (
+          <ClusterView clusters={clusters} analysis={analysis} quoted={quoted} onOpen={openTech} onRemove={remove} />
         ) : (
           <>
             {holdings.map((w) => {
@@ -459,7 +563,75 @@ export default function WatchlistPanel({ extraClass = '' }) {
           onClose={closeTech}
         />
       )}
+      {opsItem && (
+        <PositionOpsModal item={opsItem} onClose={() => setOpsItem(null)} />
+      )}
     </section>
+  );
+}
+
+/**
+ * 簇视图：把本地持仓/关注按 sector + concepts 的相关性聚类成组。
+ * 同组同色相、组内深浅由关联度决定；组间用色相区分。不依赖后端。
+ */
+function ClusterView({ clusters, analysis, quoted, onOpen, onRemove }) {
+  if (!clusters.length) {
+    return <div className="watchlist-empty">还没有标的。填代码 + 成本/股数即可开始追踪持仓盈亏。</div>;
+  }
+  return (
+    <div className="cluster-view">
+      <p className="cluster-hint">按行业 / 概念相关性自动聚类 · 同组同色相，深浅表示与组内锚点的关联强度 · 数据源为本地 tags / concepts</p>
+      {clusters.map((grp) => {
+        const barColor = clusterColor(grp.hue, 1);
+        return (
+          <section className="cluster-group" key={grp.id}>
+            <header className="cluster-group-head" style={{ borderColor: barColor }}>
+              <span className="cluster-swatch" style={{ background: barColor }} />
+              <span className="cluster-group-name">
+                {grp.members[0].w.sector || (grp.members[0].w.concepts?.[0] || '混合')}
+              </span>
+              <span className="cluster-count">{grp.members.length} 只</span>
+            </header>
+            <div className="cluster-grid">
+              {grp.members.map(({ w, sim }) => {
+                const t = resolveType(w);
+                const live = quoted.get(w.code)?.quote;
+                const pos = analysis.positions.find((p) => p.code === w.code);
+                const c = clusterColor(grp.hue, sim);
+                const cSoft = clusterColorSoft(grp.hue, sim);
+                return (
+                  <article
+                    key={w.code}
+                    className={`cluster-card type-${t}`}
+                    style={{ borderLeftColor: c, background: cSoft, boxShadow: `inset 3px 0 0 ${c}` }}
+                    role="button"
+                    tabIndex={0}
+                    title="点击查看技术分析"
+                    onClick={() => onOpen(w)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(w); } }}
+                  >
+                    <div className="cc-top">
+                      <strong>{w.name || w.code}</strong>
+                      {w.name && <span className="cc-code">{w.code}</span>}
+                      <span className="cc-sim" title="与组内锚点的关联度">{Math.round(sim * 100)}%</span>
+                    </div>
+                    <div className="cc-meta">
+                      {w.sector && <span className="cc-sector">{w.sector}</span>}
+                      {w.concepts?.slice(0, 4).map((cpt) => <span className="chip" key={cpt}>{cpt}</span>)}
+                    </div>
+                    <div className="cc-foot">
+                      <span className={`cc-pct ${cls(live?.changePct)}`}>{pct(live?.changePct)}</span>
+                      {pos && <span className={`cc-profit ${cls(pos.profit)}`}>{pos.profit >= 0 ? '+' : ''}{fmt(pos.profit)}</span>}
+                      <button className="cc-del" onClick={(e) => { e.stopPropagation(); onRemove(w.code); }}>✕</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -523,6 +695,35 @@ function TechDetailModal({ code, name, data, loading, error, onClose }) {
   const volLevel = latest.VOL_LEVEL;
   const weakUp = latest.PRICE_UP_VOL_WEAK;
 
+  // 五星卡：超卖(绿)/超买(红)/正常(黄) + 多空 + 布林带
+  const StarCell = ({ label, value, state, text }) => {
+    const cls = state === 'hot' ? 'td-star-hot' : state === 'cold' ? 'td-star-cold' : 'td-star-neutral';
+    return (
+      <div className={`td-star ${cls}`}>
+        <span className="td-star-label">{label}</span>
+        <b className="td-star-value">{value}</b>
+        <span className="td-star-text">{text}</span>
+      </div>
+    );
+  };
+
+  const diPlus = latest['DI+'] ?? NaN;
+  const diMinus = latest['DI-'] ?? NaN;
+  const dmiDiff = !isNaN(diPlus) && !isNaN(diMinus) ? diPlus - diMinus : 0;
+  const dmiState = dmiDiff >= 5 ? 'hot' : dmiDiff <= -5 ? 'cold' : 'neutral';
+  const dmiText = dmiDiff >= 5 ? '多头优' : dmiDiff <= -5 ? '空头优' : '均衡';
+
+  const bollU = latest['BOLL.U'] ?? NaN;
+  const bollL = latest['BOLL.L'] ?? NaN;
+  const close = latest.close ?? NaN;
+  const bollState =
+    !isNaN(bollU) && !isNaN(close) && close >= bollU
+      ? 'hot'
+      : !isNaN(bollL) && !isNaN(close) && close <= bollL
+      ? 'cold'
+      : 'neutral';
+  const bollText = bollState === 'hot' ? '突破上轨' : bollState === 'cold' ? '跌破下轨' : '中轨震荡';
+
   return (
     <div className="td-overlay" onClick={onClose}>
       <div className="td-modal" onClick={(e) => e.stopPropagation()}>
@@ -553,16 +754,21 @@ function TechDetailModal({ code, name, data, loading, error, onClose }) {
               </div>
             </div>
 
+            {/* 五星卡：玻璃质感综合判断 */}
+            <div className="td-five-star">
+              <StarCell label="RSI" value={fmt(latest.RSI)} state={latest.RSI > 70 ? 'hot' : latest.RSI < 30 ? 'cold' : 'neutral'} text={latest.RSI > 70 ? '超买' : latest.RSI < 30 ? '超卖' : '正常'} />
+              <StarCell label="KDJ J" value={fmt(latest['KDJ.J'])} state={latest['KDJ.J'] > 100 ? 'hot' : latest['KDJ.J'] < 0 ? 'cold' : 'neutral'} text={latest['KDJ.J'] > 100 ? '超买' : latest['KDJ.J'] < 0 ? '超卖' : '正常'} />
+              <StarCell label="CCI" value={fmt(latest.CCI)} state={latest.CCI > 100 ? 'hot' : latest.CCI < -100 ? 'cold' : 'neutral'} text={latest.CCI > 100 ? '极端强' : latest.CCI < -100 ? '极端弱' : '正常'} />
+              <StarCell label="DMI 多空" value={`${fmt(diPlus)} / ${fmt(diMinus)}`} state={dmiState} text={dmiText} />
+              <StarCell label="布林带" value={fmt(close)} state={bollState} text={bollText} />
+            </div>
+
             {/* 指标网格 */}
             <div className="td-grid">
               <Item label="MACD 柱" value={fmt(latest.MACD)} tone={latest.MACD > 0 ? 'up' : 'down'} />
               <Item label="MACD 加速度" value={fmt(latest.MACD_ACCEL)} tone={latest.MACD_ACCEL > 0 ? 'up' : 'down'} hint="柱的二阶导" />
               <Item label="DIF" value={fmt(latest.DIF)} tone={latest.DIF > 0 ? 'up' : 'down'} />
               <Item label="DEA" value={fmt(latest.DEA)} tone={latest.DEA > 0 ? 'up' : 'down'} />
-              <Item label="RSI(14)" value={fmt(latest.RSI)} tone={latest.RSI > 70 ? 'warn' : latest.RSI < 30 ? 'ok' : 'n'} hint={latest.RSI > 70 ? '超买' : latest.RSI < 30 ? '超卖' : ''} />
-              <Item label="KDJ K/D/J" value={`${fmt(latest['KDJ.K'])}/${fmt(latest['KDJ.D'])}/${fmt(latest['KDJ.J'])}`} tone={latest['KDJ.J'] > 100 ? 'warn' : 'n'} />
-              <Item label="BOLL 上/中/下" value={`${fmt(latest['BOLL.U'])}/${fmt(latest['BOLL.M'])}/${fmt(latest['BOLL.L'])}`} />
-              <Item label="CCI" value={fmt(latest.CCI)} tone={latest.CCI > 100 ? 'warn' : latest.CCI < -100 ? 'ok' : 'n'} hint={latest.CCI > 100 ? '极端强' : latest.CCI < -100 ? '极端弱' : ''} />
               <Item label="ADX" value={fmt(latest.ADX)} hint={latest.ADX > 25 ? '趋势市' : '震荡市·KDJ 慎用'} />
               <Item label="ATR(14)" value={fmt(latest.ATR14)} hint="波动幅度" />
               <Item label="SAR" value={fmt(latest.SAR)} tone="n" />

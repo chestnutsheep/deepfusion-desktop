@@ -23,3 +23,14 @@ export function readDeveloperMode() {
 export function writeDeveloperMode(on) {
   writeLocalValue('df_developer_mode', on ? 'on' : 'off');
 }
+
+// 报告输出目录：用户级偏好，默认指向 obsidian 知识库的「行业聚类分析」归档目录。
+export const DEFAULT_REPORT_OUT_DIR = '/home/AI/笔记/知识库/拾遗 • 归档/行业聚类分析';
+
+export function readReportOutDir() {
+  return readLocalValue('df_report_out_dir', DEFAULT_REPORT_OUT_DIR);
+}
+
+export function writeReportOutDir(value) {
+  writeLocalValue('df_report_out_dir', value || DEFAULT_REPORT_OUT_DIR);
+}

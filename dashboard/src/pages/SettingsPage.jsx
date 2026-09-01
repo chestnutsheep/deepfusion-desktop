@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { mcp } from '../services/mcp';
 import { Panel, Eyebrow } from '../design/Primitives';
-import { readDeveloperMode, writeDeveloperMode } from '../shared/storage';
+import { readDeveloperMode, writeDeveloperMode, readReportOutDir, writeReportOutDir, DEFAULT_REPORT_OUT_DIR } from '../shared/storage';
 import { getLogs, clearLogs } from '../services/logs';
 
 const apiBaseUrl = mcp.apiBaseUrl;
@@ -105,6 +105,36 @@ function LogsSection() {
   );
 }
 
+function ReportDirSection() {
+  const [value, setValue] = useState('');
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setValue(readReportOutDir()); }, []);
+  const save = () => {
+    writeReportOutDir(value.trim());
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+  };
+  const reset = () => { setValue(DEFAULT_REPORT_OUT_DIR); writeReportOutDir(DEFAULT_REPORT_OUT_DIR); setSaved(true); setTimeout(() => setSaved(false), 1800); };
+  return (
+    <Panel module="butler" title="报告输出目录" className="workbench-actions">
+      <p className="memory-hint">行业聚类等报告导出时，标注的归档目标目录（你的 obsidian 知识库归档位置）。当前 WebUI 通过浏览器下载导出，文件请移动到此目录；后续接入 Tauri 写盘能力后将自动落盘。</p>
+      <div className="report-dir-row">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={DEFAULT_REPORT_OUT_DIR}
+          aria-label="报告输出目录"
+          spellCheck={false}
+        />
+        <button className="focus-toggle" onClick={save}>保存</button>
+        <button className="focus-toggle" onClick={reset}>重置默认</button>
+      </div>
+      {saved && <span className="report-dir-saved">已保存到本地 ✓</span>}
+    </Panel>
+  );
+}
+
 export default function SettingsPage({ config, reports, onOpenReports }) {
   const models = config?.models?.models || [];
   const servers = config?.mcp?.servers || [];
@@ -186,6 +216,7 @@ export default function SettingsPage({ config, reports, onOpenReports }) {
           <button className="focus-toggle" onClick={onOpenReports}>进入日报中心 <span>→</span></button>
         </Panel>
 
+        <ReportDirSection />
         <LogsSection />
       </div>
     </section>
