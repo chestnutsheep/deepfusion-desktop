@@ -1,5 +1,7 @@
 const API_BASE_URL = (import.meta.env.VITE_DEEPFUSION_API_URL || 'http://127.0.0.1:5173').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_DEEPFUSION_API_TIMEOUT_MS || 12000);
+// 并发上限：后端是单进程 uv，过多在飞请求会堆积 Promise 并放大内存。限制同时最多 4 个。
+const MAX_CONCURRENT = Number(import.meta.env.VITE_DEEPFUSION_MAX_CONCURRENT || 4);
 
 export class McpError extends Error {
   constructor(message, details = {}) {
@@ -11,10 +13,30 @@ export class McpError extends Error {
   }
 }
 
+// 极简信号量：超过上限的请求排队，避免迸发打爆后端单进程
+let activeCount = 0;
+const queue = [];
+function acquire() {
+  return new Promise((resolve) => {
+    if (activeCount < MAX_CONCURRENT) {
+      activeCount += 1;
+      resolve();
+    } else {
+      queue.push(resolve);
+    }
+  });
+}
+function release() {
+  activeCount = Math.max(0, activeCount - 1);
+  const next = queue.shift();
+  if (next) { activeCount += 1; next(); }
+}
+
 export const mcp = {
   apiBaseUrl: API_BASE_URL,
 
   async call(toolName, args = {}) {
+    await acquire();
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -44,6 +66,7 @@ export const mcp = {
       });
     } finally {
       window.clearTimeout(timeout);
+      release();
     }
   },
 };

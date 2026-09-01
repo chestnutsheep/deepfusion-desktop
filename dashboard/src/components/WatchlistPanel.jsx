@@ -181,6 +181,9 @@ export default function WatchlistPanel({ extraClass = '', running = true }) {
     if (!ready || rows.length === 0 || !running) return;
     refresh();
   }, [ready, rows.length, running]);
+
+  // 卸载时清理 flash 定时器，避免对卸载组件 setState
+  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [reason, setReason] = useState('');
@@ -190,6 +193,8 @@ export default function WatchlistPanel({ extraClass = '', running = true }) {
   const [tag, setTag] = useState('持仓');
   const [entryType, setEntryType] = useState('stock');
   const [error, setError] = useState('');
+  const [flash, setFlash] = useState(''); // 轻量操作反馈（备份/恢复成功提示）
+  const flashTimer = useRef(null);
   const [busy, setBusy] = useState(false);
   const [quoted, setQuoted] = useState(() => {
     // 首屏先从本地行情缓存填充，立即显示收盘价/涨跌，避免空白等待
@@ -308,14 +313,13 @@ export default function WatchlistPanel({ extraClass = '', running = true }) {
   // 导出持仓到磁盘备份（~/.config/deepfusion/watchlist.json）
   const onExport = async () => {
     try {
-      const raw = await loadBackup();
-      if (raw) {
-        // 已有备份文件则不动，仅提示；这里直接覆盖为当前列表
-      }
-      await saveWatchlist(rows); // saveWatchlist 内部已 persistBackup
+      await saveWatchlist(rows); // saveWatchlist 内部已 persistBackup 落盘
       setError('');
+      setFlash(`已备份 ${rows.length} 条持仓到 ~/.config/deepfusion/watchlist.json`);
+      if (flashTimer.current) window.clearTimeout(flashTimer.current);
+      flashTimer.current = window.setTimeout(() => setFlash(''), 3200);
     } catch (e) {
-      setError('导出失败：' + e.message);
+      setError('备份失败：' + e.message);
     }
   };
 
@@ -326,8 +330,11 @@ export default function WatchlistPanel({ extraClass = '', running = true }) {
       if (!backup || !backup.length) { setError('没有找到备份文件'); return; }
       update(backup);
       setError('');
+      setFlash(`已从备份恢复 ${backup.length} 条持仓`);
+      if (flashTimer.current) window.clearTimeout(flashTimer.current);
+      flashTimer.current = window.setTimeout(() => setFlash(''), 3200);
     } catch (e) {
-      setError('导入失败：' + e.message);
+      setError('恢复失败：' + e.message);
     }
   };
 
@@ -491,6 +498,7 @@ export default function WatchlistPanel({ extraClass = '', running = true }) {
       </form>
 
       {error && <div className="watchlist-error" role="alert">{error}</div>}
+      {flash && <div className="watchlist-flash" role="status">{flash}</div>}
 
       <div className={`watchlist-list view-${view}`}>
         {rows.length === 0 && <div className="watchlist-empty">还没有标的。填代码 + 成本/股数即可开始追踪持仓盈亏。</div>}

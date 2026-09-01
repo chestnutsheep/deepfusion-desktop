@@ -18,13 +18,16 @@ import FuturesPanel from './components/FuturesPanel';
 import ConceptDeconstructPanel from './components/ConceptDeconstructPanel';
 import IndustryThemesPanel from './components/IndustryThemesPanel';
 import MethodologyPanel from './components/MethodologyPanel';
+import CalendarPanel from './components/CalendarPanel';
+import NewsWire from './components/NewsWire';
+import QuantPanel from './components/QuantPanel';
 import { Eyebrow } from './design/Primitives';
 import { installGlobalLogCapture } from './services/logs';
 import './styles.css';
 
 installGlobalLogCapture();
 
-const navItems = [['概览', '⌂'], ['日报', '✉'], ['设置', '⚙'], ['资产', '◧'], ['期货', '⬢'], ['行业', '◉'], ['概念', '⊞'], ['方法论', '❖'], ['任务', '◫'], ['市场', '⌁'], ['文件', '⌑'], ['专注', '◌']];
+const navItems = [['概览', '⌂'], ['日报', '✉'], ['日历', '◷'], ['快讯', '⊚'], ['量化', '⚇'], ['设置', '⚙'], ['资产', '◧'], ['期货', '⬢'], ['行业', '◉'], ['概念', '⊞'], ['方法论', '❖'], ['任务', '◫'], ['市场', '⌁'], ['文件', '⌑'], ['专注', '◌']];
 const schedule = [
   { time: '09:00', title: '盘前信息简报', meta: '本地任务 · 预计 2 分钟', state: '就绪', target: '日报' },
   { time: '12:50', title: '午间新闻驱动扫描', meta: '采集 · 分析 · 推送候选项', state: '待运行', target: '市场' },
@@ -111,7 +114,7 @@ function ScheduleTimeline({ now, onNavigate }) {
   </div>;
 }
 
-function MarketPulse({ now, onNote }) {
+function MarketPulse({ now, onViewMarket }) {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
   const session = getMarketSession(now);
@@ -133,18 +136,25 @@ function MarketPulse({ now, onNote }) {
     return () => { alive = false; window.clearInterval(timer); };
   }, [usSession]);
   const sourceItems = usSession ? snapshot?.global_indices : aShareSession ? snapshot?.indices : null;
-  const items = sourceItems?.length ? sourceItems.slice(0, 6).map((item) => ({
-    name: item.name, value: item.price == null ? '—' : Number(item.price).toLocaleString('zh-CN', { maximumFractionDigits: 2 }),
-    delta: item.change_pct == null ? '—' : `${item.change_pct >= 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`, positive: item.change_pct == null ? null : item.change_pct >= 0,
-  })) : [];
+  const rows = sourceItems?.length ? sourceItems.slice(0, 6).map((item) => {
+    const pct = item.change_pct == null ? null : Number(item.change_pct);
+    const cls = pct == null ? 'flat' : pct >= 0 ? 'up' : 'down';
+    return {
+      name: item.name,
+      value: item.price == null ? '—' : Number(item.price).toLocaleString('zh-CN', { maximumFractionDigits: 2 }),
+      delta: pct == null ? '—' : `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
+      cls,
+      arrow: pct == null ? '' : pct >= 0 ? '▲' : '▼',
+    };
+  }) : [];
   const turnover = snapshot?.turnover;
   const sessionLabel = aShareSession ? 'A股交易中' : usSession ? '美股交易中' : '市场休市';
   const freshnessLabel = loading ? '同步中' : snapshot?.snapshot_at ? `${session === 'closed' ? '最近快照' : '快照'} ${snapshot.snapshot_at.slice(11, 16)}` : '无快照';
   return <section className="panel market enter-four">
     <div className="panel-head"><div><Eyebrow module="market">市场脉冲</Eyebrow><h2>市场脉冲</h2></div><span className="source-pill">{sessionLabel} · {freshnessLabel}</span></div>
-    {items.length ? <div className="market-list">{items.map((item) => <div className="market-row" key={item.name}><span>{item.name}</span><strong>{item.value}</strong><b className={item.positive === true ? 'up' : item.positive === false ? 'down' : 'flat'}>{item.delta}</b></div>)}</div> : <div className="market-empty">{usSession ? '美股指数源暂不可用，未使用旧数据冒充实时。' : session === 'closed' ? '当前休市，等待下一交易时段实时快照。' : '当前交易时段暂无有效指数数据。'}</div>}
+    {rows.length ? <div className="market-list">{rows.map((item) => <div className="market-row" key={item.name}><span>{item.name}</span><strong className={`price-${item.cls}`}>{item.value}</strong><b className={item.cls}>{item.arrow} {item.delta}</b></div>)}</div> : <div className="market-empty">{usSession ? '美股指数源暂不可用，未使用旧数据冒充实时。' : session === 'closed' ? '当前休市，等待下一交易时段实时快照。' : '当前交易时段暂无有效指数数据。'}</div>}
     <div className="market-data-strip"><div><small>涨跌比例</small><strong>{sourceItems?.length ? `${sourceItems.filter((x) => x.change_pct > 0).length} / ${sourceItems.filter((x) => x.change_pct < 0).length}` : '— / —'}</strong></div><div><small>成交额</small><strong>{turnover?.today_yi ? `${turnover.today_yi} 亿` : '—'}</strong></div><div><small>较昨日</small><strong className={turnover?.delta_pct >= 0 ? 'up' : turnover?.delta_pct == null ? 'flat' : 'down'}>{turnover?.delta_pct == null ? '—' : `${turnover.delta_pct >= 0 ? '+' : ''}${turnover.delta_pct.toFixed(2)}%`}</strong></div></div>
-    <div className="market-footer"><span>{aShareSession ? 'A股六大重要指数 · 红涨绿跌' : usSession ? '美股核心指数 · 数据源独立' : '休市状态 · 显示最近一次有效快照'}</span><button onClick={() => onNote('市场脉冲：指数、涨跌比例和成交额新鲜度已校验。')}>查看专区 ↗</button></div>
+    <div className="market-footer"><span>{aShareSession ? 'A股六大重要指数 · 红涨绿跌' : usSession ? '美股核心指数 · 数据源独立' : '休市状态 · 显示最近一次有效快照'}</span><button className="market-view-button" onClick={() => onViewMarket()}>查看专区 ↗</button></div>
   </section>;
 }
 
@@ -251,6 +261,7 @@ function App() {
   const [now, setNow] = useState(new Date());
   const [active, setActive] = useState('概览');
   const [dockOpen, setDockOpen] = useState(false);
+  const [butlerOpen, setButlerOpen] = useState(false);
   const [focus, setFocus] = useState(false);
   const [note, setNote] = useState(() => readLocalValue('deepfusion.desktop.note', '请输入需要记录的事项。'));
   const [themeId, setThemeId] = useState(() => readLocalValue('deepfusion.desktop.theme', DEFAULT_THEME_ID));
@@ -455,6 +466,9 @@ function App() {
           <div className="archive-list">{reportsLoading ? <div className="report-empty-state">正在从 `reports.db` 读取日报…</div> : visibleReports.length ? visibleReports.map((report) => <article key={report.id} className="archive-item"><ReportRow report={report} onOpen={openReport} /><div className="report-meta"><span>{report.status}</span><span>报告日 {report.date}</span><span>实际入库 {report.createdAt}</span></div></article>) : <div className="report-empty-state">暂无符合条件的真实日报，定时任务写入后会自动出现在这里。</div>}</div>
         </section></> : <>
           {active === '任务' && <CapabilityPanel title="未来 14 天金融事件" eyebrow="DEEPFUSION / EVENT CALENDAR" items={taskItems} empty="事件日历暂无待办，点击下方刷新后端采集。" />}
+          {active === '日历' && <CalendarPanel />}
+          {active === '快讯' && <NewsWire />}
+          {active === '量化' && <QuantPanel />}
           {active === '市场' && <CapabilityPanel title="资金面动向" eyebrow="DEEPFUSION / CAPITAL FLOWS" items={capitalItems} empty="资金快照暂未落盘。" />}
           {active === '文件' && <CapabilityPanel title="政策文件索引" eyebrow="DEEPFUSION / POLICY LIBRARY" items={policyResults} empty="政策库暂无结果；本机文件浏览能力尚未接入。" />}
           {active === '资产' && <AssetAllocationPanel />}
@@ -471,7 +485,7 @@ function App() {
             </section>
             <section className="content-block block-market">
               <div className="block-head"><div><Eyebrow module="market">盘面脉搏</Eyebrow><h2>盘面脉搏</h2></div><span className="block-hint">资金面 · 涨跌家数 · 板块强度</span></div>
-              <div id="market-pulse" className="panel market panel--secondary block-body"><MarketPulse now={now} onNote={setNote} /></div>
+              <div id="market-pulse" className="panel market panel--secondary block-body"><MarketPulse now={now} onViewMarket={() => setActive('市场')} /></div>
             </section>
             <section className="content-block block-brief">
               <div className="block-head"><div><Eyebrow module="overview">研究台摘要</Eyebrow><h2>研究台摘要</h2></div><button className="focus-toggle" onClick={() => openReportCenter()}>打开日报 <span>→</span></button></div>
@@ -492,7 +506,25 @@ function App() {
     </section>
     {selectedReport && <div className="report-overlay" role="dialog" aria-modal="true" aria-label="日报详情"><article className="report-detail"><button className="detail-close" onClick={() => setSelectedReport(null)} aria-label="关闭日报详情">×</button><p className="eyebrow">{selectedReport.key.toUpperCase()} / {selectedReport.date}</p><span className="detail-kind">{selectedReport.type} · {selectedReport.status}</span><h2>{selectedReport.title}</h2><div className="detail-time"><span>报告业务日 <b>{selectedReport.date}</b></span><span>实际生成 <b>{selectedReport.createdAt}</b></span></div><p>{selectedReport.summary}</p><div className="report-detail-divider"><span className="report-detail-label">核心要点</span><ReportDetailContent report={selectedReport} /></div></article></div>}
     <div className="watermark" aria-hidden="true"><span>WATER<br />LILY</span><i>DEEPFUSION</i></div>
-    <button className="butler" onClick={() => setNote('管家入口已响应；下一阶段将接入本机 Butler 服务。')} aria-label="打开本机管家"><span>✦</span><i>管家</i></button>
+    <button className="butler" onClick={() => setButlerOpen(true)} aria-label="打开本机管家"><span>✦</span><i>管家</i></button>
+    {butlerOpen && (
+      <div className="butler-overlay" role="dialog" aria-modal="true" aria-label="本机管家">
+        <article className="butler-card">
+          <button className="detail-close" onClick={() => setButlerOpen(false)} aria-label="关闭管家">×</button>
+          <p className="eyebrow">DEEPFUSION / BUTLER</p>
+          <h2>本机管家</h2>
+          <p className="butler-lead">管家负责把你的桌面环境、后端服务与定时任务串起来。当前可做的事：</p>
+          <ul className="butler-list">
+            <li><b>启动后端</b><span>点击桌面「DF Server」即可拉起 5173 数据服务；面板已自动探测其在线状态。</span></li>
+            <li><b>持仓备份</b><span>在「概览 → 持仓追踪」点「备份」，落盘到 ~/.config/deepfusion/watchlist.json。</span></li>
+            <li><b>市场脉冲</b><span>右上「查看专区」跳到市场页看资金面与涨跌家数；红涨绿跌已生效。</span></li>
+            <li><b>定时日报</b><span>后端定时任务写入 reports.db 后，报告中心会自动出现真实日报。</span></li>
+          </ul>
+          <p className="butler-note">下一步将接入本机 Butler 服务（自然语言指令、跨应用调度）。当前版本以手动入口为主。</p>
+          <button className="butler-ok" onClick={() => setButlerOpen(false)}>知道了</button>
+        </article>
+      </div>
+    )}
     <div className={dockOpen ? 'dock open' : 'dock'} onMouseEnter={() => setDockOpen(true)} onMouseLeave={() => setDockOpen(false)}>
       <button aria-label="打开设置" onClick={() => { setActive('设置'); setDockOpen(false); }}>⚙</button>
       <button aria-label="打开文件" onClick={() => { setActive('文件'); setDockOpen(false); }}>⌑</button>
